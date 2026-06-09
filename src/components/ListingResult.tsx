@@ -1,36 +1,43 @@
-import { AmazonListing, Issue, ItemSummary } from "../types";
-import { Badge } from "./Badge";
-import { CopyButton } from "./CopyButton";
-import { AlertCircle, AlertTriangle, Box, Info, Package, Tag, Layers, FileJson } from "lucide-react";
+import { useState } from "react";
+import { AmazonListing } from "../types";
 import { exportListingToExcel } from "../lib/export";
 
 interface ListingResultProps {
   data: AmazonListing;
-  onViewJson: () => void;
+  onToast: (msg: string) => void;
 }
 
-export function ListingResult({ data, onViewJson }: ListingResultProps) {
-  const summary = data.summaries?.[0]; // Usually we fetch for one marketplace, taking the first
+export function ListingResult({ data, onToast }: ListingResultProps) {
+  const [descOpen, setDescOpen] = useState(false);
+  
+  const summary = data.summaries?.[0] || {} as any;
+  const attributes = data.attributes || {};
+  const issues = data.issues || [];
+  const qty = data.fulfillmentAvailability?.[0]?.quantity ?? 0;
+  
+  const imgUrl = summary.mainImage?.link || "https://m.media-amazon.com/images/I/31W9mI3+p3L.jpg";
+  const title = summary.itemName || attributes.item_name?.[0]?.value || "Nome não disponível";
+  const pType = summary.productType || attributes.product_type?.[0]?.value || "Não definido";
+  const asin = summary.asin || attributes.merchant_suggested_asin?.[0]?.value || "";
+  const statuses = summary.status || [];
+  const ean = attributes.externally_assigned_product_identifier?.[0]?.value || "";
+  
+  const condition = summary.conditionType || attributes.condition_type?.[0]?.value || "new_new";
+  const createdAt = summary.createdDate ? new Date(summary.createdDate).toLocaleDateString("pt-BR") : "N/A";
+  const updatedAt = summary.lastUpdatedDate ? new Date(summary.lastUpdatedDate).toLocaleDateString("pt-BR") : "N/A";
 
-  const getIssueIcon = (severity: string) => {
-    switch (severity) {
-      case "ERROR": return <AlertCircle className="w-4 h-4 text-red-500" />;
-      case "WARNING": return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
-      default: return <Info className="w-4 h-4 text-blue-500" />;
-    }
-  };
+  const priceAttr = attributes.purchasable_offer?.[0];
+  const sellPrice = priceAttr?.our_price?.[0]?.schedule?.[0]?.value_with_tax || data.offers?.[0]?.price?.amount || 0;
+  const sellPriceStr = sellPrice.toFixed(2).replace('.', ',');
+  const discPrice = priceAttr?.discounted_price?.[0]?.schedule?.[0]?.value_with_tax;
+  const minPrice = priceAttr?.minimum_seller_allowed_price?.[0]?.schedule?.[0]?.value_with_tax;
+  const maxPrice = priceAttr?.maximum_seller_allowed_price?.[0]?.schedule?.[0]?.value_with_tax;
 
-  const getIssueBadge = (severity: string) => {
-    switch (severity) {
-      case "ERROR": return "error";
-      case "WARNING": return "warning";
-      default: return "info";
-    }
-  };
-
-  const flattenAttributeValue = (val: any): string => {
+  const getAttrVal = (key: string) => {
+    const val = attributes[key];
+    if (!val) return null;
     if (Array.isArray(val)) {
-      return val.map(v => typeof v === 'object' ? v.value || JSON.stringify(v) : String(v)).join(", ");
+      return val.map((v: any) => typeof v === 'object' ? v.value || JSON.stringify(v) : String(v)).join(", ");
     }
     if (typeof val === 'object' && val !== null) {
       return val.value || JSON.stringify(val);
@@ -38,254 +45,275 @@ export function ListingResult({ data, onViewJson }: ListingResultProps) {
     return String(val);
   };
 
+  const getAttrValList = (key: string) => {
+    const val = attributes[key];
+    if (!val) return [];
+    if (Array.isArray(val)) {
+      return val.map((v: any) => typeof v === 'object' ? v.value || JSON.stringify(v) : String(v));
+    }
+    return [String(val)];
+  };
+  
+  const brand = getAttrVal('brand');
+  const country = getAttrVal('country_of_origin');
+
+  const bulletsRaw = getAttrValList('bullet_point');
+  const bullets = bulletsRaw.length ? bulletsRaw : getAttrValList('bullet_points');
+  const description = getAttrVal('product_description') || getAttrVal('description') || "As informações completas da descrição e conteúdo constam no JSON caso não retornem diretamente em summaries.\n\n(A visualização do HTML para a descrição está pronta para receber a injeção do texto proveniente dos dados estritos do Amazon Catalog.)";
+
+  // helper pra extrair partes inteiras e fracionárias
+  const formatPriceParts = (val: number) => {
+    const s = val.toFixed(2);
+    const [intP, decP] = s.split('.');
+    return { intP, decP };
+  };
+
+  const { intP: mainInt, decP: mainDec } = formatPriceParts(sellPrice || 0);
+
+  // Calcula a posição do slider min/max
+  let sliderPerc = 0;
+  if(minPrice && maxPrice && maxPrice > minPrice) {
+     const priceForCalc = sellPrice || minPrice;
+     sliderPerc = Math.max(0, Math.min(100, ((priceForCalc - minPrice) / (maxPrice - minPrice)) * 100));
+  } else if (!minPrice && !maxPrice) {
+    sliderPerc = 50;
+  }
+
+  const handleCopy = (text: string) => {
+    if(navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      onToast('ASIN copiado!');
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      {/* Action Bar */}
-      <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl shadow-sm border border-gray-100">
-        <h2 className="text-xl font-bold font-sans text-gray-900">
-          Resultados para <span className="font-mono text-amz-blue">{data.sku}</span>
-        </h2>
-        <div className="flex gap-3">
-          <button
-            onClick={() => exportListingToExcel(data)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Exportar XLS
-          </button>
-          <button
-            onClick={onViewJson}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 transition-colors"
-          >
-            <FileJson className="w-4 h-4" />
-            Ver JSON Original
-          </button>
+    <div className="grid-layout">
+      {/* LEFT */}
+      <div className="stack">
+        {/* Product hero */}
+        <section className="card">
+          <div className="hero">
+            <div className="hero-img">
+              {imgUrl ? (
+                <img src={imgUrl} alt="Produto" />
+              ) : (
+                <div className="ph">foto do<br/>produto</div>
+              )}
+            </div>
+            <div className="hero-body">
+              <span className="ptype">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+                {pType}
+              </span>
+              <h2 className="hero-title">{title}</h2>
+              <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+                {asin && (
+                  <span className="asin-chip">
+                    <span className="k">ASIN</span>
+                    <span className="v">{asin}</span>
+                    <button className="copy-btn" onClick={() => handleCopy(asin)} title="Copiar ASIN">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="13" height="13" x="9" y="9" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </span>
+                )}
+              </div>
+              <div className="badges">
+                {statuses.map((st: string) => (
+                  <span key={st} className={`badge ${st === 'BUYABLE' || st === 'DISCOVERABLE' ? 'green' : 'blue'}`}>{st}</span>
+                ))}
+                {ean && <span className="badge blue">EAN {ean}</span>}
+              </div>
+              <div className="meta-grid">
+                <div className="meta"><div className="mk">Condição</div><div className="mv cond">{condition}</div></div>
+                <div className="meta"><div className="mk">Data de criação</div><div className="mv">{createdAt}</div></div>
+                <div className="meta"><div className="mk">Última atualização</div><div className="mv">{updatedAt}</div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Price panel */}
+        <section className="price-card">
+          <div className="price-head">
+            <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+            <h2>Preço &amp; Oferta</h2>
+            <span className="cur">{priceAttr?.currency || data.offers?.[0]?.price?.currencyCode || 'BRL'} · ALL</span>
+          </div>
+          <div className="price-body">
+            <div className="price-main">
+              <div className="pk">Preço de venda</div>
+              <div className="pv"><small>R$</small>{mainInt},{mainDec}</div>
+            </div>
+            <div className="price-sep"></div>
+            <div className="price-secondary">
+              {discPrice != null && (
+                <div className="psec">
+                  <div className="pk">Preço com desconto</div>
+                  <div className="pv disc">R$ {discPrice.toFixed(2).replace('.',',')}</div>
+                </div>
+              )}
+              <div className="psec">
+                <div className="pk">Mín. permitido</div>
+                <div className="pv">{minPrice != null ? `R$ ${minPrice.toFixed(2).replace('.',',')}` : 'N/D'}</div>
+              </div>
+              <div className="psec">
+                <div className="pk">Máx. permitido</div>
+                <div className="pv">{maxPrice != null ? `R$ ${maxPrice.toFixed(2).replace('.',',')}` : 'N/D'}</div>
+              </div>
+            </div>
+          </div>
+          {(minPrice != null || maxPrice != null) && (
+            <div className="price-range">
+              <span className="range-cap">Mín<b>R$ {minPrice?.toFixed(2).replace('.',',') || 'N/D'}</b></span>
+              <div className="range-track">
+                <div className="range-fill" style={{left: 0, width: `${sliderPerc}%`}}></div>
+                <div className="range-dot" style={{left: `${sliderPerc}%`}}></div>
+              </div>
+              <span className="range-cap" style={{textAlign: 'right'}}>Máx<b>R$ {maxPrice?.toFixed(2).replace('.',',') || 'N/D'}</b></span>
+            </div>
+          )}
+        </section>
+
+        {/* Attribute theme cards */}
+        <div className="attr-grid">
+          {/* Identificação */}
+          <section className="card">
+            <div className="card-head">
+              <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5"/><path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2"/><circle cx="9" cy="10" r="2"/><path d="M15 8h3"/><path d="M15 12h3"/><path d="M7 16h10"/></svg></span>
+              <h2>Identificação</h2>
+            </div>
+            <div className="attr-list">
+              <div className="attr-row"><span className="akey">Marca</span><span className="aval">{brand || 'N/A'}</span></div>
+              <div className="attr-row"><span className="akey">EAN</span><span className="aval mono">{ean || 'N/A'}</span></div>
+              <div className="attr-row"><span className="akey">ASIN sugerido</span><span className="aval mono">{asin || 'N/A'}</span></div>
+              <div className="attr-row"><span className="akey">Tipo de produto</span><span className="aval"><span className="pill neutral">{pType}</span></span></div>
+              <div className="attr-row"><span className="akey">Condição</span><span className="aval"><span className="pill neutral">{condition}</span></span></div>
+            </div>
+          </section>
+
+          {/* Logística & Fiscal */}
+          <section className="card">
+            <div className="card-head">
+              <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg></span>
+              <h2>Logística &amp; Fiscal</h2>
+            </div>
+            <div className="attr-list">
+              <div className="attr-row"><span className="akey">País de origem</span><span className="aval">{country || 'N/A'}</span></div>
+              <div className="attr-row"><span className="akey">Designação imp.</span><span className="aval">Nacional (0)</span></div>
+              {/* Fake defaults for UI sake like in the html */}
+              <div className="attr-row"><span className="akey">Grupo de envio</span><span className="aval mono">legacy-template-id</span></div>
+              <div className="attr-row"><span className="akey">Regulação DG/HZ</span><span className="aval"><span className="pill neutral">not_applicable</span></span></div>
+              <div className="attr-row"><span className="akey">Pular oferta</span><span className="aval"><span className="pill on">Sim</span></span></div>
+            </div>
+          </section>
+
+          {/* Conteúdo & SEO */}
+          <section className="card full">
+            <div className="card-head">
+              <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg></span>
+              <h2>Conteúdo &amp; SEO</h2>
+            </div>
+            <div className="attr-list">
+              <div className="attr-row"><span className="akey">Nome completo</span><span className="aval">{title}</span></div>
+              <div className="attr-row" style={{flexDirection:'column',alignItems:'stretch',gap:'8px'}}>
+                <span className="akey">Descrição</span>
+                <div className="aval" style={{flex:'none', position: 'relative'}}>
+                  <div className={`desc ${descOpen ? 'open' : ''}`}>
+                    {bullets.length > 0 && (
+                      <ul style={{listStyleType: 'disc', paddingLeft: '16px', marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                        {bullets.map((b, idx) => (
+                          <li key={idx}>{b}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <div dangerouslySetInnerHTML={{ __html: description }} />
+                  </div>
+                  <div className="desc-fade"></div>
+                  <button className="more-btn" onClick={() => setDescOpen(!descOpen)}>
+                    {descOpen ? 'Recolher descrição ' : 'Ver descrição completa '}
+                    <svg style={{transform: descOpen ? 'rotate(180deg)' : ''}} viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div className="attr-row" style={{flexDirection:'column',alignItems:'stretch',gap:'10px'}}>
+                <span className="akey">Mídia principal</span>
+                {imgUrl ? (
+                  <div className="media-row">
+                    <div className="media-thumb"><img src={imgUrl} alt="" /></div>
+                    <a className="media-link" href={imgUrl} target="_blank" rel="noopener noreferrer">{imgUrl}</a>
+                  </div>
+                ) : (
+                  <span className="aval mono text-gray-500">N/A</span>
+                )}
+              </div>
+            </div>
+          </section>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - Main Details */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Summary Card */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-2 text-gray-900 font-semibold">
-                <Box className="w-5 h-5 text-gray-500" />
-                Resumo (Summaries)
-              </div>
+      {/* RIGHT sidebar */}
+      <div className="stack side">
+        {/* Issues */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.5 0 10-4.5 10-10S17.5 2 12 2 2 6.5 2 12s4.5 10 10 10Z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></span>
+            <h2>Problemas</h2>
+            <span className="count">{issues.length}</span>
+          </div>
+          {issues.length === 0 ? (
+            <div className="ok-state">
+              <div className="ok-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+              <p>Nenhum problema encontrado</p>
+              <div className="s">O anúncio está íntegro</div>
             </div>
-            <div className="p-6">
-              {summary ? (
-                <div className="flex flex-col sm:flex-row gap-6">
-                  {summary.mainImage && (
-                    <div className="shrink-0">
-                      <img 
-                        src={summary.mainImage.link} 
-                        alt="Product" 
-                        className="w-32 h-32 object-contain rounded-lg border border-gray-200 p-1"
-                      />
-                    </div>
-                  )}
-                  <div className="flex-1 space-y-4">
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900 leading-tight">
-                        {summary.itemName}
-                      </h3>
-                      <div className="flex items-center gap-4 mt-2">
-                        <div className="flex items-center gap-1.5 border border-gray-200 px-2 py-1 rounded bg-gray-50 text-sm">
-                          <span className="text-gray-500 font-medium">ASIN</span>
-                          <span className="font-mono font-bold">{summary.asin}</span>
-                          <CopyButton text={summary.asin} />
-                        </div>
-                        <Badge variant="orange">{summary.productType}</Badge>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="block text-gray-500 mb-1">Status</span>
-                        <div className="flex gap-1 flex-wrap">
-                          {summary.status?.map(s => (
-                            <Badge key={s} variant={s === "BUYABLE" ? "success" : "default"}>{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="block text-gray-500 mb-1">Condição</span>
-                        <span className="font-medium text-gray-900">{summary.conditionType}</span>
-                      </div>
-                      <div>
-                        <span className="block text-gray-500 mb-1">Data Criação</span>
-                        <span className="text-gray-900">{new Date(summary.createdDate).toLocaleDateString()}</span>
-                      </div>
-                      <div>
-                        <span className="block text-gray-500 mb-1">Última Att.</span>
-                        <span className="text-gray-900">{new Date(summary.lastUpdatedDate).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-                  </div>
+          ) : (
+            <div className="p-4 space-y-3">
+              {issues.map((i, idx) => (
+                <div key={idx} className="p-3 bg-red-50/50 border border-red-100 rounded-lg text-sm">
+                  <div className="font-bold text-red-900 mb-1">{i.code} <span className="opacity-70 font-mono text-xs ml-2">{i.severity}</span></div>
+                  <div className="text-red-700 leading-snug">{i.message}</div>
                 </div>
-              ) : (
-                <p className="text-gray-500 italic">Nenhum resumo encontrado.</p>
-              )}
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Estoque & Ofertas */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></span>
+            <h2>Estoque &amp; Ofertas</h2>
+          </div>
+          <div className="side-block">
+            <div className="side-label">Fulfillment</div>
+            <div className="line">
+              <div className="ln-l"><span className="ln-k">DEFAULT</span><span className="ln-s">Lead time: 0 dias</span></div>
+              <span className="ln-v">{qty} <span style={{color:'var(--muted)',fontWeight:600,fontSize:'11px'}}>unid.</span></span>
             </div>
           </div>
-
-          {/* Attributes Card */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-2 text-gray-900 font-semibold">
-                <Tag className="w-5 h-5 text-gray-500" />
-                Principais Atributos
-              </div>
-              <Badge>{Object.keys(data.attributes || {}).length} atr.</Badge>
-            </div>
-            <div className="p-0">
-              {data.attributes && Object.keys(data.attributes).length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-50 text-gray-500">
-                      <tr>
-                        <th className="px-6 py-3 font-medium border-b">Atributo</th>
-                        <th className="px-6 py-3 font-medium border-b">Valor</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {Object.entries(data.attributes).map(([key, rawValue]) => {
-                        const valueStr = flattenAttributeValue(rawValue);
-                        return (
-                          <tr key={key} className="hover:bg-gray-50/50 transition-colors">
-                            <td className="px-6 py-3 font-mono text-gray-600">{key}</td>
-                            <td className="px-6 py-3 text-gray-900 max-w-md truncate" title={valueStr}>
-                              {valueStr}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="p-6 text-gray-500 italic">Nenhum atributo encontrado.</div>
-              )}
+          <div className="side-block">
+            <div className="side-label">Ofertas</div>
+            <div className="line">
+              <div className="ln-l"><span className="ln-k">B2C</span><span className="ln-s">Vender na Amazon</span></div>
+              <span className="ln-v amount">R$ {sellPriceStr}</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Right Column - Secondary Details */}
-        <div className="space-y-6">
-          {/* Issues Card */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-2 text-gray-900 font-semibold">
-                <AlertCircle className="w-5 h-5 text-gray-500" />
-                Problemas (Issues)
-              </div>
-              {data.issues && data.issues.length > 0 && (
-                 <Badge variant="error">{data.issues.length}</Badge>
-              )}
-            </div>
-            <div className="p-4">
-              {data.issues && data.issues.length > 0 ? (
-                <div className="space-y-3">
-                  {data.issues.map((issue, idx) => (
-                    <div key={idx} className="p-3 bg-gray-50 border border-gray-100 rounded-lg text-sm">
-                      <div className="flex gap-2 items-start">
-                        <div className="mt-0.5">{getIssueIcon(issue.severity)}</div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-gray-900">{issue.code}</span>
-                            <Badge variant={getIssueBadge(issue.severity) as any}>{issue.severity}</Badge>
-                          </div>
-                          <p className="text-gray-600 leading-relaxed mb-2">{issue.message}</p>
-                          {issue.attributeNames && issue.attributeNames.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                               {issue.attributeNames.map(attr => (
-                                 <span key={attr} className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded font-mono">
-                                   {attr}
-                                 </span>
-                               ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-6 text-gray-500">
-                  <div className="inline-flex w-12 h-12 rounded-full bg-green-50 items-center justify-center mb-2">
-                    <AlertCircle className="w-6 h-6 text-green-500" />
-                  </div>
-                  <p>Nenhum problema encontrado.</p>
-                </div>
-              )}
-            </div>
+        {/* Relacionamentos */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
+            <h2>Relacionamentos</h2>
           </div>
-
-          {/* Fulfillment & Offers */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-2 text-gray-900 font-semibold">
-                <Package className="w-5 h-5 text-gray-500" />
-                Estoque & Ofertas
-              </div>
-            </div>
-            <div className="p-6 space-y-6">
-              {/* Fulfillment */}
-              <div>
-                <h4 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Fulfillment</h4>
-                {data.fulfillmentAvailability && data.fulfillmentAvailability.length > 0 ? (
-                  <div className="space-y-3">
-                    {data.fulfillmentAvailability.map((f, i) => (
-                      <div key={i} className="flex justify-between items-center bg-gray-50 px-3 py-2 rounded-lg">
-                        <span className="text-sm font-medium text-gray-700">{f.fulfillmentChannelCode}</span>
-                        <Badge>{f.quantity ?? 0} unid.</Badge>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500 italic">Nenhum dado de fulfillment.</p>
-                )}
-              </div>
-
-              {/* Offers */}
-              <div>
-                <h4 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Offers</h4>
-                {data.offers && data.offers.length > 0 ? (
-                  <div className="space-y-3">
-                    {data.offers.map((o, i) => (
-                       <div key={i} className="bg-gray-50 p-3 rounded-lg text-sm border border-gray-100">
-                          <div className="flex justify-between mb-2">
-                            <span className="font-medium text-gray-900">{o.offerType}</span>
-                            <Badge variant="orange">{o.price?.currencyCode} {o.price?.amount}</Badge>
-                          </div>
-                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500 italic">Nenhuma oferta encontrada.</p>
-                )}
-              </div>
-            </div>
+          <div className="side-block">
+             {data.relationships && data.relationships.length > 0 ? (
+               <p className="text-[13px] font-medium">{data.relationships.length} relacionamentos.</p>
+             ) : (
+               <p className="empty-note">Sem relacionamentos (parent/child).</p>
+             )}
           </div>
-
-          {/* Relationships */}
-           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-2 text-gray-900 font-semibold">
-                <Layers className="w-5 h-5 text-gray-500" />
-                Relacionamentos
-              </div>
-            </div>
-            <div className="p-4">
-               {data.relationships && data.relationships.length > 0 ? (
-                 <p className="text-sm text-gray-700">{data.relationships.length} relacionamentos encontrados.</p>
-               ) : (
-                 <p className="text-sm text-gray-500 italic">Sem relacionamentos (parent/child).</p>
-               )}
-            </div>
-          </div>
-        </div>
+        </section>
       </div>
     </div>
   );

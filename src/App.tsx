@@ -1,13 +1,10 @@
-import { useState } from "react";
-import { Tabs } from "./components/Tabs";
-import { CredentialsForm } from "./components/CredentialsForm";
-import { ListingResult } from "./components/ListingResult";
-import { JsonModal } from "./components/JsonModal";
+import { useState, FormEvent, useEffect } from "react";
 import { getListingsItem } from "./services/amazonService";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { AmazonCredentials, AmazonListing } from "./types";
 import { MARKETPLACES } from "./constants";
-import { AlertCircle, PackageSearch } from "lucide-react";
+import { ListingResult } from "./components/ListingResult";
+import { JsonDrawer } from "./components/JsonDrawer";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("Listings / Itens");
@@ -22,20 +19,29 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AmazonListing | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+
+  const [toastMsg, setToastMsg] = useState("");
+  const [showToast, setShowToast] = useState(false);
 
   const TABS = ["Listings / Itens", "Pedidos", "Estoque FBA", "Catálogo"];
 
-  const handleConsult = async (creds: AmazonCredentials, sku: string) => {
-    setCredentials(creds);
-    setLastSku(sku);
+  const handleConsult = async (e?: FormEvent) => {
+    if (e) e.preventDefault();
+    if (!lastSku) return;
+
     setIsLoading(true);
     setError(null);
     setResult(null);
 
+    // Fechar credentials se estiver aberto
+    setIsEditOpen(false);
+
     try {
-      const data = await getListingsItem(creds, { sku });
+      const data = await getListingsItem(credentials, { sku: lastSku });
       setResult(data);
+      displayToast(`Item ${lastSku} carregado`);
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Erro desconhecido ao consultar SP-API.");
@@ -44,89 +50,174 @@ export default function App() {
     }
   };
 
+  const displayToast = (msg: string) => {
+    setToastMsg(msg);
+    setShowToast(true);
+  };
+
+  useEffect(() => {
+    if (showToast) {
+      const timer = setTimeout(() => setShowToast(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [showToast]);
+
+  const selectedMarketplace = MARKETPLACES.find(m => m.id === credentials.marketplaceId)?.name || 'Desconhecido';
+  const shortToken = credentials.accessToken ? `•••••••• ${credentials.accessToken.slice(-4)}` : "Não configurado";
+  const sellerIdDisp = credentials.sellerId || "Não configurado";
+
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-amz-orange/20">
-      {/* Header */}
-      <header className="bg-amz-blue text-white shadow-md">
-        <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <PackageSearch className="w-8 h-8 text-amz-orange" />
-            <h1 className="text-xl font-bold tracking-tight">
-              Amazon Listings Explorer
-            </h1>
+    <>
+      {/* Top header */}
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="m12 13 0 8"/></svg>
           </div>
-          <div className="text-xs text-gray-300 font-mono tracking-wider hidden sm:block">
-            SP-API DEV TOOL
-          </div>
+          <span className="brand-name">Amazon <b>Listings</b> Explorer</span>
         </div>
+        <span className="topbar-right">SP-API DEV TOOL</span>
       </header>
 
-      {/* Main Content */}
-      <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        
-        {/* Navigation */}
-        <div className="bg-white rounded-t-xl px-1 pt-1 border-b border-gray-200">
-          <Tabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
-        </div>
+      <div className="shell">
+        {/* Tabs */}
+        <nav className="tabs">
+          {TABS.map(tab => (
+            <button 
+              key={tab} 
+              className={`tab ${activeTab === tab ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab)}
+            >
+              {tab}
+            </button>
+          ))}
+        </nav>
 
         {activeTab === "Listings / Itens" ? (
-          <div className="space-y-8">
-            {/* Formulario */}
-            <div className="max-w-4xl">
-              <CredentialsForm
-                initialCredentials={credentials}
-                initialSku={lastSku}
-                onSubmit={handleConsult}
-                isLoading={isLoading}
-              />
-            </div>
+          <>
+            {/* Compact connection bar */}
+            <section className="conn">
+              <div className="conn-row">
+                <div className="conn-status">
+                  <span className="pulse"></span>
+                  <div>
+                    <div className="lbl">Conectado</div>
+                    <div className="sub">Credenciais ativas</div>
+                  </div>
+                </div>
+                <div className="chips">
+                  <span className="chip"><span className="k">Token</span><span className="v">{shortToken}</span></span>
+                  <span className="chip"><span className="k">Seller</span><span className="v">{sellerIdDisp}</span></span>
+                  <span className="chip"><span className="flag"></span><span className="v">{selectedMarketplace}</span></span>
+                </div>
+                <button className="link-btn" onClick={() => setIsEditOpen(!isEditOpen)}>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  Editar credenciais
+                </button>
+                <div className="conn-spacer"></div>
+                <form className="conn-query" onSubmit={handleConsult}>
+                  <div className="field" style={{minWidth: "180px"}}>
+                    <label htmlFor="sku">SKU do Produto</label>
+                    <input 
+                      className="input mono" 
+                      id="sku" 
+                      value={lastSku}
+                      onChange={(e) => setLastSku(e.target.value)}
+                      placeholder="SKU"
+                      required
+                    />
+                  </div>
+                  <button type="submit" disabled={isLoading} className="btn btn-primary">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                    {isLoading ? "Consultando..." : "Consultar Item"}
+                  </button>
+                </form>
+              </div>
+              
+              {/* expandable credentials */}
+              <div className={`conn-edit ${isEditOpen ? 'open' : ''}`}>
+                <div className="conn-edit-grid">
+                  <div className="field">
+                    <label>Access Token (LWA)</label>
+                    <input 
+                      className="input mono" 
+                      type="password" 
+                      value={credentials.accessToken}
+                      onChange={e => setCredentials({...credentials, accessToken: e.target.value})}
+                      placeholder="Atza|IwEBI..."
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Seller ID</label>
+                    <input 
+                      className="input mono" 
+                      value={credentials.sellerId}
+                      onChange={e => setCredentials({...credentials, sellerId: e.target.value})}
+                      placeholder="A1ZR..."
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Marketplace</label>
+                    <select 
+                      className="input"
+                      value={credentials.marketplaceId}
+                      onChange={e => setCredentials({...credentials, marketplaceId: e.target.value})}
+                    >
+                      {MARKETPLACES.map(m => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </section>
 
             {/* Error Message */}
             {error && (
-              <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg max-w-4xl">
-                <div className="flex items-start">
-                  <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 mr-3 shrink-0" />
-                  <p className="text-red-800 text-sm font-medium whitespace-pre-wrap">{error}</p>
-                </div>
+              <div className="conn mt-4 !border-[#f5b76b] !bg-[#fffaf0] p-4 text-[#e8861a] font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                <strong className="text-red-700 block mb-1">Erro de Consulta:</strong>
+                {error}
               </div>
             )}
 
-            {/* Loading Skeleton (Simples) */}
-            {isLoading && (
-              <div className="animate-pulse space-y-6">
-                 <div className="h-16 bg-gray-200 rounded-2xl w-full"></div>
-                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-2 h-96 bg-gray-200 rounded-2xl"></div>
-                    <div className="h-96 bg-gray-200 rounded-2xl"></div>
-                 </div>
-              </div>
-            )}
-
-            {/* Resulados */}
+            {/* Results */}
             {result && !isLoading && (
-              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <ListingResult data={result} onViewJson={() => setIsModalOpen(true)} />
-              </div>
+              <>
+                <div className="results-head">
+                  <h1>Resultados para <span>{result.sku}</span></h1>
+                  <div className="results-actions">
+                    <button className="btn btn-ghost" onClick={() => displayToast('Exportando XLS...')}>
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="m9 13 6 6"/><path d="m15 13-6 6"/></svg>
+                      Exportar XLS
+                    </button>
+                    <button className="btn btn-dark" onClick={() => setIsDrawerOpen(true)}>
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m8 18 4-4-4-4"/><path d="m16 6-4 4 4 4" transform="translate(0,4)"/><path d="M10 4 6 20" /></svg>
+                      Ver JSON Original
+                    </button>
+                  </div>
+                </div>
+
+                {/* Main grid */}
+                <ListingResult data={result} onToast={displayToast} />
+              </>
             )}
-          </div>
+          </>
         ) : (
-          <div className="py-20 text-center text-gray-500 max-w-lg mx-auto">
-             <PackageSearch className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-             <h2 className="text-lg font-medium text-gray-900 mb-2">Aba em desenvolvimento</h2>
-             <p className="text-sm">A aba "{activeTab}" está preparada para expansão futura. No momento, utilize a aba "Listings / Itens".</p>
+          <div className="card mt-6 p-10 text-center flex flex-col items-center justify-center">
+             <div className="ok-ico !bg-surface-2 !text-muted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
+             <h2 className="text-[14.5px] font-bold text-ink">Aba em desenvolvimento</h2>
+             <p className="text-muted text-[13px] mt-1">Utilize a aba "Listings / Itens" por enquanto.</p>
           </div>
         )}
-      </main>
+      </div>
 
-      {/* JSON Modal */}
-      {result && (
-        <JsonModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          data={result}
-          title={`JSON Retornado: ${result.sku}`}
-        />
-      )}
-    </div>
+      {result && <JsonDrawer isOpen={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} data={result} onToast={displayToast} />}
+
+      {/* Toast */}
+      <div className={`toast ${showToast ? 'show' : ''}`}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        <span>{toastMsg}</span>
+      </div>
+    </>
   );
 }
