@@ -24,7 +24,7 @@ export default function App() {
     sellerId: "",
     marketplaceId: MARKETPLACES[0].id,
   });
-  const [lastSku, setLastSku] = useLocalStorage<string>("amz_last_sku", "");
+  const [lastSku, setLastSku] = useState<string>("");
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,11 +41,7 @@ export default function App() {
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [ordersNextToken, setOrdersNextToken] = useState<string | null>(null);
   const [ordersDatePreset, setOrdersDatePreset] = useState<"7" | "30" | "90" | "custom">("30");
-  const [ordersCustomDate, setOrdersCustomDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
+  const [ordersCustomDate, setOrdersCustomDate] = useState<string>("");
   const [ordersStatuses, setOrdersStatuses] = useState<string[]>(["Shipped"]);
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
