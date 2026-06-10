@@ -43,6 +43,9 @@ export default function App() {
   const [ordersDatePreset, setOrdersDatePreset] = useState<"7" | "30" | "90" | "custom">("30");
   const [ordersCustomDate, setOrdersCustomDate] = useState<string>("");
   const [ordersStatuses, setOrdersStatuses] = useState<string[]>(["Shipped"]);
+  const [ordersSearchMode, setOrdersSearchMode] = useState<"period" | "ids">("period");
+  const [ordersSearchIds, setOrdersSearchIds] = useState<string>("");
+  const [ordersNotFoundIds, setOrdersNotFoundIds] = useState<string[]>([]);
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
@@ -215,46 +218,106 @@ export default function App() {
   const handleQueryOrders = async (isLoadMore: boolean = false) => {
     setOrdersLoading(true);
     setOrdersError(null);
+    setOrdersNotFoundIds([]);
 
-    // Calculate createdAfter
-    let createdAfterISO = "";
-    if (ordersDatePreset === "custom") {
-      if (!ordersCustomDate) {
-        setOrdersError("Por favor, selecione uma data inicial.");
+    const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+
+    if (ordersSearchMode === "ids") {
+      // Por ID
+      if (!isLoadMore) {
+        setOrders([]);
+      }
+      
+      const rawIds = ordersSearchIds.split(/[\n,\s]+/).map(i => i.trim()).filter(i => i.length > 0);
+      const targetIds: string[] = Array.from(new Set(rawIds));
+      
+      if (targetIds.length === 0) {
+        setOrdersError("Por favor, preencha ao menos um ID de pedido.");
         setOrdersLoading(false);
         return;
       }
-      createdAfterISO = new Date(ordersCustomDate + "T00:00:00").toISOString();
-    } else {
-      const days = parseInt(ordersDatePreset);
-      const d = new Date();
-      d.setDate(d.getDate() - days);
-      createdAfterISO = d.toISOString();
-    }
 
-    try {
-      const activeNextToken = isLoadMore ? (ordersNextToken || undefined) : undefined;
-      const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
-      
-      const response = await getOrders(fixedCreds, {
-        createdAfter: createdAfterISO,
-        orderStatuses: ordersStatuses,
-        nextToken: activeNextToken
-      });
-
-      const newOrders = response.Orders || [];
-      if (isLoadMore) {
-        setOrders(prev => [...prev, ...newOrders]);
-      } else {
-        setOrders(newOrders);
+      const invalidIds = targetIds.filter(id => !/^\d{3}-\d{7}-\d{7}$/.test(id));
+      if (invalidIds.length > 0) {
+        setOrdersError(`IDs com formato inválido (o formato correto é 000-0000000-0000000):\n${invalidIds.join(', ')}`);
+        setOrdersLoading(false);
+        return;
       }
-      setOrdersNextToken(response.NextToken || null);
-      displayToast(isLoadMore ? `${newOrders.length} novos pedidos carregados` : `${newOrders.length} pedidos carregados`);
-    } catch (err: any) {
-      console.error(err);
-      setOrdersError(err.message || "Erro desconhecido ao consultar SP-API.");
-    } finally {
-      setOrdersLoading(false);
+
+      try {
+        let allOrders: AmazonOrder[] = [];
+        
+        // Chunk into batches of 50
+        const chunkSize = 50;
+        for (let i = 0; i < targetIds.length; i += chunkSize) {
+          const chunk = targetIds.slice(i, i + chunkSize);
+          
+          if (i > 0) {
+            // Delay for rate limit
+            setOrdersLoading(true); // Optional: keep it set
+            await new Promise(res => setTimeout(res, 2000));
+          }
+          
+          const response = await getOrders(fixedCreds, {
+            amazonOrderIds: chunk
+          });
+          
+          allOrders = [...allOrders, ...(response.Orders || [])];
+        }
+
+        setOrders(allOrders);
+        const returnedIds = allOrders.map(o => o.AmazonOrderId);
+        const missing = targetIds.filter(id => !returnedIds.includes(id));
+        setOrdersNotFoundIds(missing);
+        setOrdersNextToken(null);
+        displayToast(`${allOrders.length} de ${targetIds.length} pedidos encontrados`);
+      } catch (err: any) {
+        console.error(err);
+        setOrdersError(err.message || "Erro desconhecido ao consultar SP-API (IDs).");
+      } finally {
+        setOrdersLoading(false);
+      }
+
+    } else {
+      // Por Período (comportamento original)
+      let createdAfterISO = "";
+      if (ordersDatePreset === "custom") {
+        if (!ordersCustomDate) {
+          setOrdersError("Por favor, selecione uma data inicial.");
+          setOrdersLoading(false);
+          return;
+        }
+        createdAfterISO = new Date(ordersCustomDate + "T00:00:00").toISOString();
+      } else {
+        const days = parseInt(ordersDatePreset);
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        createdAfterISO = d.toISOString();
+      }
+
+      try {
+        const activeNextToken = isLoadMore ? (ordersNextToken || undefined) : undefined;
+        
+        const response = await getOrders(fixedCreds, {
+          createdAfter: createdAfterISO,
+          orderStatuses: ordersStatuses,
+          nextToken: activeNextToken
+        });
+
+        const newOrders = response.Orders || [];
+        if (isLoadMore) {
+          setOrders(prev => [...prev, ...newOrders]);
+        } else {
+          setOrders(newOrders);
+        }
+        setOrdersNextToken(response.NextToken || null);
+        displayToast(isLoadMore ? `${newOrders.length} novos pedidos carregados` : `${newOrders.length} pedidos carregados`);
+      } catch (err: any) {
+        console.error(err);
+        setOrdersError(err.message || "Erro desconhecido ao consultar SP-API.");
+      } finally {
+        setOrdersLoading(false);
+      }
     }
   };
 
@@ -555,76 +618,118 @@ export default function App() {
 
               {/* Status and Filters row */}
               <div className="flex flex-col gap-4 p-4 md:p-[16px_18px]">
-                <div className="flex flex-wrap gap-[18px] items-end">
-                  <div className="field">
-                    <label>Período</label>
-                    <select 
-                      className="input" 
-                      value={ordersDatePreset} 
-                      onChange={e => setOrdersDatePreset(e.target.value as any)}
-                    >
-                      <option value="7">Últimos 7 dias</option>
-                      <option value="30">Últimos 30 dias</option>
-                      <option value="90">Últimos 90 dias</option>
-                      <option value="custom">Data customizada</option>
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label>A partir de</label>
-                    <input 
-                      type="date" 
-                      className="input" 
-                      value={ordersCustomDate} 
-                      onChange={e => setOrdersCustomDate(e.target.value)} 
-                      disabled={ordersDatePreset !== "custom"}
-                    />
+                <div className="flex justify-start mb-2">
+                  <div className="status-pills">
+                    <button 
+                      type="button" 
+                      className={`spill ${ordersSearchMode === "period" ? "on" : ""}`}
+                      onClick={() => setOrdersSearchMode("period")}
+                    >Por Período</button>
+                    <button 
+                      type="button" 
+                      className={`spill ${ordersSearchMode === "ids" ? "on" : ""}`}
+                      onClick={() => setOrdersSearchMode("ids")}
+                    >Por ID do Pedido</button>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-[18px] items-end">
-                  <div className="field">
-                    <label>Status do Pedido</label>
-                    <div className="status-pills">
-                      {[
-                        { id: "Pending", label: "Pendente" },
-                        { id: "Unshipped", label: "Não enviado" },
-                        { id: "PartiallyShipped", label: "Parcialmente enviado" },
-                        { id: "Shipped", label: "Enviado" },
-                        { id: "Canceled", label: "Cancelado" }
-                      ].map(opt => {
-                        const isChecked = ordersStatuses.includes(opt.id);
-                        return (
-                          <button
-                            type="button"
-                            key={opt.id}
-                            onClick={() => {
-                              if (isChecked) {
-                                setOrdersStatuses(ordersStatuses.filter(s => s !== opt.id));
-                              } else {
-                                setOrdersStatuses([...ordersStatuses, opt.id]);
-                              }
-                            }}
-                            className={`spill ${isChecked ? 'on' : ''}`}
-                          >
-                            {opt.label}
-                          </button>
-                        );
-                      })}
+                {ordersSearchMode === "period" ? (
+                  <>
+                    <div className="flex flex-wrap gap-[18px] items-end">
+                      <div className="field">
+                        <label>Período</label>
+                        <select 
+                          className="input" 
+                          value={ordersDatePreset} 
+                          onChange={e => setOrdersDatePreset(e.target.value as any)}
+                        >
+                          <option value="7">Últimos 7 dias</option>
+                          <option value="30">Últimos 30 dias</option>
+                          <option value="90">Últimos 90 dias</option>
+                          <option value="custom">Data customizada</option>
+                        </select>
+                      </div>
+                      <div className="field">
+                        <label>A partir de</label>
+                        <input 
+                          type="date" 
+                          className="input" 
+                          value={ordersCustomDate} 
+                          onChange={e => setOrdersCustomDate(e.target.value)} 
+                          disabled={ordersDatePreset !== "custom"}
+                        />
+                      </div>
                     </div>
+
+                    <div className="flex flex-wrap gap-[18px] items-end">
+                      <div className="field">
+                        <label>Status do Pedido</label>
+                        <div className="status-pills">
+                          {[
+                            { id: "Pending", label: "Pendente" },
+                            { id: "Unshipped", label: "Não enviado" },
+                            { id: "PartiallyShipped", label: "Parcialmente enviado" },
+                            { id: "Shipped", label: "Enviado" },
+                            { id: "Canceled", label: "Cancelado" }
+                          ].map(opt => {
+                            const isChecked = ordersStatuses.includes(opt.id);
+                            return (
+                              <button
+                                type="button"
+                                key={opt.id}
+                                onClick={() => {
+                                  if (isChecked) {
+                                    setOrdersStatuses(ordersStatuses.filter(s => s !== opt.id));
+                                  } else {
+                                    setOrdersStatuses([...ordersStatuses, opt.id]);
+                                  }
+                                }}
+                                className={`spill ${isChecked ? 'on' : ''}`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex-1"></div>
+
+                      <button 
+                        type="button" 
+                        onClick={() => handleQueryOrders(false)} 
+                        disabled={ordersLoading} 
+                        className="btn btn-primary"
+                      >
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                        {ordersLoading && orders.length === 0 ? "Buscando..." : "Buscar Pedidos"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap gap-[18px] items-end">
+                    <div className="field flex-1" style={{ minWidth: "200px" }}>
+                      <label>ID(s) do(s) pedido(s) (separados por vírgula ou linha)</label>
+                      <textarea
+                        placeholder="Ex: 000-0000000-0000000"
+                        className="input mono"
+                        style={{ height: "42px", minHeight: "42px", maxHeight: "150px", resize: "vertical", padding: "8px 12px" }}
+                        value={ordersSearchIds}
+                        onChange={(e) => setOrdersSearchIds(e.target.value)}
+                      />
+                    </div>
+                    <button 
+                      type="button" 
+                      onClick={() => handleQueryOrders(false)} 
+                      disabled={ordersLoading || !ordersSearchIds.trim()} 
+                      className="btn btn-primary"
+                      style={{ height: "42px" }}
+                    >
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                      {ordersLoading && orders.length === 0 ? "Buscando..." : "Buscar Pedidos"}
+                    </button>
                   </div>
-
-                  <div className="flex-1"></div>
-
-                  <button 
-                    type="button" 
-                    onClick={() => handleQueryOrders(false)} 
-                    disabled={ordersLoading} 
-                    className="btn btn-primary"
-                  >
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-                    {ordersLoading && orders.length === 0 ? "Buscando..." : "Buscar Pedidos"}
-                  </button>
-                </div>
+                )}
               </div>
             </section>
 
@@ -633,6 +738,14 @@ export default function App() {
               <div className="conn mt-4 !border-[#f5b76b] !bg-[#fffaf0] p-4 text-[#e8861a] font-mono text-sm leading-relaxed whitespace-pre-wrap">
                 <strong className="text-red-700 block mb-1">Erro de Consulta:</strong>
                 {ordersError}
+              </div>
+            )}
+
+            {/* Orders Not Found Message */}
+            {ordersNotFoundIds.length > 0 && (
+              <div className="conn mt-4 !border-[#f5b76b] !bg-[#fffaf0] p-4 text-[#e8861a] font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                <strong className="text-red-700 block mb-1">Pedidos não encontrados:</strong>
+                {ordersNotFoundIds.join(", ")}
               </div>
             )}
 

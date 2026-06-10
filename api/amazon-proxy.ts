@@ -50,16 +50,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else if (op === "getOrders") {
       const queryParams = new URLSearchParams();
       queryParams.set("MarketplaceIds", marketplaceId);
-      if (params?.createdAfter) {
-        queryParams.set("CreatedAfter", params.createdAfter);
+      
+      if (params?.amazonOrderIds && Array.isArray(params.amazonOrderIds) && params.amazonOrderIds.length > 0) {
+        queryParams.set("AmazonOrderIds", params.amazonOrderIds.join(","));
+      } else {
+        if (params?.createdAfter) {
+          queryParams.set("CreatedAfter", params.createdAfter);
+        }
+        if (params?.orderStatuses && Array.isArray(params.orderStatuses)) {
+          params.orderStatuses.forEach((st: string) => {
+            queryParams.append("OrderStatuses", st);
+          });
+        }
       }
+
       if (params?.nextToken) {
         queryParams.set("NextToken", params.nextToken);
-      }
-      if (params?.orderStatuses && Array.isArray(params.orderStatuses)) {
-        params.orderStatuses.forEach((st: string) => {
-          queryParams.append("OrderStatuses", st);
-        });
       }
       queryParams.set("MaxResultsPerPage", "100");
       url = `${BASE_URL_NA}/orders/v0/orders?${queryParams.toString()}`;

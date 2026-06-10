@@ -111,7 +111,7 @@ export const searchListingsItems = async (
 
 export const getOrders = async (
   credentials: AmazonCredentials,
-  params: { createdAfter: string; orderStatuses?: string[]; nextToken?: string }
+  params: { createdAfter?: string; orderStatuses?: string[]; nextToken?: string; amazonOrderIds?: string[] }
 ): Promise<OrdersResponse> => {
   const jsonStr = encodeURIComponent(JSON.stringify({ credentials, params, operation: "getOrders" }));
   let payload = "";
