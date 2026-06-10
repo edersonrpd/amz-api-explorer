@@ -7,7 +7,6 @@ import { ListingResult } from "./components/ListingResult";
 import { JsonDrawer } from "./components/JsonDrawer";
 import { OrderDetailsModal } from "./components/OrderDetailsModal";
 import { exportListingToExcel, exportAllListingsToExcel } from "./lib/export";
-import { MOCK_ORDERS_WITH_ITEMS } from "./mockData";
 
 const ORDER_STATUS_OPTIONS = [
   { id: "Pending", label: "Pendente" },
@@ -37,9 +36,7 @@ export default function App() {
   const [drawerTitle, setDrawerTitle] = useState("");
 
   // Orders State
-  const [orders, setOrders] = useState<AmazonOrder[]>(() => {
-    return MOCK_ORDERS_WITH_ITEMS.map(mo => mo.order);
-  });
+  const [orders, setOrders] = useState<AmazonOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [ordersNextToken, setOrdersNextToken] = useState<string | null>(null);
@@ -51,19 +48,13 @@ export default function App() {
   });
   const [ordersStatuses, setOrdersStatuses] = useState<string[]>(["Shipped"]);
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
-  const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>(() => {
-    const cache: Record<string, { loading: boolean; items?: OrderItem[]; error?: string }> = {};
-    for (const mo of MOCK_ORDERS_WITH_ITEMS) {
-      cache[mo.order.AmazonOrderId] = { loading: false, items: mo.items };
-    }
-    return cache;
-  });
+  const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
 
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
 
-  const TABS = ["Listings / Itens", "Pedidos", "Estoque FBA", "Catálogo"];
+  const TABS = ["Listings / Itens", "Pedidos"];
 
   const parseSkus = (input: string): string[] => {
     if (!input) return [];
