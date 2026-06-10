@@ -1,11 +1,19 @@
 import { useState, FormEvent, useEffect } from "react";
-import { getListingsItem, searchListingsItems } from "./services/amazonService";
+import { getListingsItem, searchListingsItems, getOrders, getOrderItems } from "./services/amazonService";
 import { useLocalStorage } from "./hooks/useLocalStorage";
-import { AmazonCredentials, AmazonListing, SkuResult } from "./types";
+import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem } from "./types";
 import { MARKETPLACES } from "./constants";
 import { ListingResult } from "./components/ListingResult";
 import { JsonDrawer } from "./components/JsonDrawer";
 import { exportListingToExcel, exportAllListingsToExcel } from "./lib/export";
+
+const ORDER_STATUS_OPTIONS = [
+  { id: "Pending", label: "Pendente" },
+  { id: "Unshipped", label: "Não Enviado" },
+  { id: "PartiallyShipped", label: "Parcialmente Enviado" },
+  { id: "Shipped", label: "Enviado" },
+  { id: "Canceled", label: "Cancelado" }
+];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("Listings / Itens");
@@ -23,6 +31,23 @@ export default function App() {
   const [selectedSku, setSelectedSku] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [drawerData, setDrawerData] = useState<any | null>(null);
+  const [drawerTitle, setDrawerTitle] = useState("");
+
+  // Orders State
+  const [orders, setOrders] = useState<AmazonOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [ordersNextToken, setOrdersNextToken] = useState<string | null>(null);
+  const [ordersDatePreset, setOrdersDatePreset] = useState<"7" | "30" | "90" | "custom">("30");
+  const [ordersCustomDate, setOrdersCustomDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [ordersStatuses, setOrdersStatuses] = useState<string[]>(["Unshipped", "Shipped"]);
+  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
+  const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
 
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
@@ -144,6 +169,93 @@ export default function App() {
   const displayToast = (msg: string) => {
     setToastMsg(msg);
     setShowToast(true);
+  };
+
+  const openJsonDrawer = (data: any, titleStr: string) => {
+    setDrawerData(data);
+    setDrawerTitle(titleStr);
+    setIsDrawerOpen(true);
+  };
+
+  const formatPrice = (total: any) => {
+    if (!total || total.Amount === undefined) return "-";
+    const amt = parseFloat(total.Amount);
+    return `${total.CurrencyCode === 'BRL' ? 'R$' : total.CurrencyCode} ${amt.toFixed(2).replace('.', ',')}`;
+  };
+
+  const handleQueryOrders = async (isLoadMore: boolean = false) => {
+    setOrdersLoading(true);
+    setOrdersError(null);
+
+    // Calculate createdAfter
+    let createdAfterISO = "";
+    if (ordersDatePreset === "custom") {
+      if (!ordersCustomDate) {
+        setOrdersError("Por favor, selecione uma data inicial.");
+        setOrdersLoading(false);
+        return;
+      }
+      createdAfterISO = new Date(ordersCustomDate + "T00:00:00").toISOString();
+    } else {
+      const days = parseInt(ordersDatePreset);
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      createdAfterISO = d.toISOString();
+    }
+
+    try {
+      const activeNextToken = isLoadMore ? (ordersNextToken || undefined) : undefined;
+      const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+      
+      const response = await getOrders(fixedCreds, {
+        createdAfter: createdAfterISO,
+        orderStatuses: ordersStatuses,
+        nextToken: activeNextToken
+      });
+
+      const newOrders = response.Orders || [];
+      if (isLoadMore) {
+        setOrders(prev => [...prev, ...newOrders]);
+      } else {
+        setOrders(newOrders);
+      }
+      setOrdersNextToken(response.NextToken || null);
+      displayToast(isLoadMore ? `${newOrders.length} novos pedidos carregados` : `${newOrders.length} pedidos carregados`);
+    } catch (err: any) {
+      console.error(err);
+      setOrdersError(err.message || "Erro desconhecido ao consultar SP-API.");
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
+  const handleToggleOrderItems = async (orderId: string) => {
+    // Toggle expand state
+    const isExpanded = !expandedOrders[orderId];
+    setExpandedOrders(prev => ({ ...prev, [orderId]: isExpanded }));
+
+    // Load items if not cached and going to expand
+    if (isExpanded && !ordersItemsCache[orderId]) {
+      setOrdersItemsCache(prev => ({
+        ...prev,
+        [orderId]: { loading: true }
+      }));
+
+      try {
+        const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+        const response = await getOrderItems(fixedCreds, { orderId });
+        setOrdersItemsCache(prev => ({
+          ...prev,
+          [orderId]: { loading: false, items: response.OrderItems || [] }
+        }));
+      } catch (err: any) {
+        console.error(err);
+        setOrdersItemsCache(prev => ({
+          ...prev,
+          [orderId]: { loading: false, error: err.message || "Erro ao carregar itens." }
+        }));
+      }
+    }
   };
 
   useEffect(() => {
@@ -382,16 +494,358 @@ export default function App() {
               </>
             )}
           </>
+        ) : activeTab === "Pedidos" ? (
+          <>
+            {/* Connection & Filters Bar */}
+            <section className="conn flex flex-col">
+              {/* Credentials editing block */}
+              <div className="conn-edit">
+                <div className="conn-edit-grid">
+                  <div className="field">
+                    <label>Access Token (LWA)</label>
+                    <input 
+                      className="input mono" 
+                      type="password" 
+                      value={credentials.accessToken}
+                      onChange={e => setCredentials({...credentials, accessToken: e.target.value})}
+                      placeholder="Atza|IwEBI..."
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Seller ID</label>
+                    <input 
+                      className="input mono" 
+                      value={credentials.sellerId}
+                      onChange={e => setCredentials({...credentials, sellerId: e.target.value})}
+                      placeholder="A1ZR..."
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Status and Filters row */}
+              <div className="p-4 border-t border-border flex flex-col md:flex-row gap-4 items-stretch bg-surface-2">
+                <div className="flex flex-wrap gap-4 flex-1">
+                  <div className="field" style={{ minWidth: "160px" }}>
+                    <label>Período</label>
+                    <select 
+                      className="input w-full" 
+                      value={ordersDatePreset} 
+                      onChange={e => setOrdersDatePreset(e.target.value as any)}
+                    >
+                      <option value="7">Últimos 7 dias</option>
+                      <option value="30">Últimos 30 dias</option>
+                      <option value="90">Últimos 90 dias</option>
+                      <option value="custom">Data customizada</option>
+                    </select>
+                  </div>
+
+                  {ordersDatePreset === "custom" && (
+                    <div className="field" style={{ minWidth: "160px" }}>
+                      <label>A partir de</label>
+                      <input 
+                        type="date" 
+                        className="input w-full" 
+                        value={ordersCustomDate} 
+                        onChange={e => setOrdersCustomDate(e.target.value)} 
+                      />
+                    </div>
+                  )}
+
+                  <div className="field flex-1" style={{ minWidth: "250px" }}>
+                    <label>Status do Pedido</label>
+                    <div className="flex gap-1.5 flex-wrap items-center mt-1">
+                      {ORDER_STATUS_OPTIONS.map(opt => {
+                        const isChecked = ordersStatuses.includes(opt.id);
+                        return (
+                          <button
+                            type="button"
+                            key={opt.id}
+                            onClick={() => {
+                              if (isChecked) {
+                                setOrdersStatuses(ordersStatuses.filter(s => s !== opt.id));
+                              } else {
+                                setOrdersStatuses([...ordersStatuses, opt.id]);
+                              }
+                            }}
+                            className={`chip cursor-pointer text-xs font-semibold uppercase px-2 py-0.5 border ${
+                              isChecked 
+                                ? 'bg-[#e1f5fe] border-[#0288d1] text-[#0288d1] font-bold' 
+                                : 'bg-surface border-border text-muted hover:text-ink'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-end">
+                  <button 
+                    type="button" 
+                    onClick={() => handleQueryOrders(false)} 
+                    disabled={ordersLoading} 
+                    className="btn btn-primary w-full md:w-auto flex items-center justify-center gap-2" 
+                    style={{ height: "42px" }}
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                    {ordersLoading && orders.length === 0 ? "Buscando..." : "Buscar Pedidos"}
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* Error Message */}
+            {ordersError && (
+              <div className="conn mt-4 !border-[#f5b76b] !bg-[#fffaf0] p-4 text-[#e8861a] font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                <strong className="text-red-700 block mb-1">Erro de Consulta:</strong>
+                {ordersError}
+              </div>
+            )}
+
+            {/* Orders List Container */}
+            {orders.length > 0 ? (
+              <div className="card mt-6 overflow-hidden">
+                <div className="border-b border-border p-4 bg-surface flex items-center justify-between">
+                  <h3 className="text-[13.5px] font-bold text-ink flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+                    Pedidos Encontrados ({orders.length})
+                  </h3>
+                  <span className="text-xs text-muted">Selecione um pedido para visualizar os itens</span>
+                </div>
+                
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-[13px]">
+                    <thead>
+                      <tr className="border-b border-border bg-surface-2 text-muted text-xs font-semibold uppercase tracking-wider">
+                        <th className="p-3 w-10"></th>
+                        <th className="p-3">ID do Pedido (Amazon)</th>
+                        <th className="p-3">Data de Compra</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Canal de Envio</th>
+                        <th className="p-3">Itens</th>
+                        <th className="p-3">Total do Pedido</th>
+                        <th className="p-3 text-right" style={{ paddingRight: "16px" }}>Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {orders.map((ord) => {
+                        const isExpanded = !!expandedOrders[ord.AmazonOrderId];
+                        const itemsInfo = ordersItemsCache[ord.AmazonOrderId];
+                        
+                        const purchaseDateObj = new Date(ord.PurchaseDate);
+                        const formattedDate = isNaN(purchaseDateObj.getTime())
+                          ? ord.PurchaseDate
+                          : purchaseDateObj.toLocaleDateString("pt-BR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit"
+                            });
+
+                        // Badges for status
+                        let statusColorClass = "bg-gray-10 text-gray-700";
+                        if (ord.OrderStatus === "Pending") statusColorClass = "bg-[#fff9c4] text-[#f57f17] border-[#fbc02d]";
+                        if (ord.OrderStatus === "Unshipped") statusColorClass = "bg-[#e3f2fd] text-[#0d47a1] border-[#90caf9]";
+                        if (ord.OrderStatus === "PartiallyShipped") statusColorClass = "bg-[#f3e5f5] text-[#4a148c] border-[#ce93d8]";
+                        if (ord.OrderStatus === "Shipped") statusColorClass = "bg-[#e8f5e9] text-[#1b5e20] border-[#a5d6a7]";
+                        if (ord.OrderStatus === "Canceled") statusColorClass = "bg-[#ffebee] text-[#b71c1c] border-[#ef9a9a]";
+
+                        return (
+                          <span key={ord.AmazonOrderId} className="contents">
+                            <tr 
+                              onClick={() => handleToggleOrderItems(ord.AmazonOrderId)}
+                              className={`hover:bg-surface-2 cursor-pointer transition-colors ${isExpanded ? 'bg-accent/5' : ''}`}
+                            >
+                              <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                <button 
+                                  onClick={() => handleToggleOrderItems(ord.AmazonOrderId)}
+                                  className="text-muted hover:text-ink w-6 h-6 flex items-center justify-center rounded-full hover:bg-surface-3 transition-colors"
+                                >
+                                  <svg 
+                                    viewBox="0 0 24 24" 
+                                    width="16" 
+                                    height="16" 
+                                    fill="none" 
+                                    stroke="currentColor" 
+                                    strokeWidth="2.5" 
+                                    className={`transform transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                  >
+                                    <path d="m9 18 6-6-6-6"/>
+                                  </svg>
+                                </button>
+                              </td>
+                              <td className="p-3 font-semibold font-mono text-ink select-all">{ord.AmazonOrderId}</td>
+                              <td className="p-3 text-ink-2">{formattedDate}</td>
+                              <td className="p-3">
+                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase ${statusColorClass}`}>
+                                  {ord.OrderStatus === "Pending" && "Pendente"}
+                                  {ord.OrderStatus === "Unshipped" && "Não Enviado"}
+                                  {ord.OrderStatus === "PartiallyShipped" && "Enviado Parcialmente"}
+                                  {ord.OrderStatus === "Shipped" && "Enviado"}
+                                  {ord.OrderStatus === "Canceled" && "Cancelado"}
+                                  {ord.OrderStatus !== "Pending" && ord.OrderStatus !== "Unshipped" && ord.OrderStatus !== "PartiallyShipped" && ord.OrderStatus !== "Shipped" && ord.OrderStatus !== "Canceled" && ord.OrderStatus}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                {ord.FulfillmentChannel === "AFN" ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#efebe9] text-[#5d4037] uppercase">FBA / AFN</span>
+                                ) : ord.FulfillmentChannel === "MFN" ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#eceff1] text-[#37474f] uppercase">FBM / MFN</span>
+                                ) : (
+                                  <span className="text-muted">-</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-ink-2">
+                                <span className="font-medium text-ink">{ord.NumberOfItemsShipped || 0}</span> enviado{ord.NumberOfItemsShipped !== 1 ? 's' : ''} / <span className="font-medium text-ink">{ord.NumberOfItemsUnshipped || 0}</span> pendente{ord.NumberOfItemsUnshipped !== 1 ? 's' : ''}
+                              </td>
+                              <td className="p-3 font-mono font-bold text-ink">{formatPrice(ord.OrderTotal)}</td>
+                              <td className="p-3 text-right" style={{ paddingRight: "16px" }} onClick={(e) => e.stopPropagation()}>
+                                <button 
+                                  className="btn btn-ghost font-semibold text-accent" 
+                                  style={{ padding: "4px 8px", fontSize: "11px" }}
+                                  onClick={() => openJsonDrawer(ord, `Pedido: ${ord.AmazonOrderId}`)}
+                                >
+                                  Ver JSON
+                                </button>
+                              </td>
+                            </tr>
+
+                            {/* Expanded items section */}
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={8} className="p-0 bg-surface">
+                                  <div className="border-l-4 border-l-accent bg-surface-2 p-4 m-3 rounded shadow-sm border border-border">
+                                    <h4 className="text-xs font-bold text-ink uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+                                      Itens do Pedido ({ord.AmazonOrderId})
+                                    </h4>
+
+                                    {itemsInfo?.loading && (
+                                      <div className="py-6 flex items-center justify-center gap-2 text-muted text-xs font-semibold">
+                                        <div className="spinner animate-spin"></div>
+                                        <span>Carregando itens da Amazon SP-API...</span>
+                                      </div>
+                                    )}
+
+                                    {itemsInfo?.error && (
+                                      <div className="p-3 bg-red-10 border border-red-200 text-red-700 text-xs rounded font-mono">
+                                        <strong>Erro ao carregar itens:</strong> {itemsInfo.error}
+                                      </div>
+                                    )}
+
+                                    {itemsInfo && !itemsInfo.loading && !itemsInfo.error && (
+                                      itemsInfo.items && itemsInfo.items.length > 0 ? (
+                                        <div className="overflow-hidden rounded border border-border bg-surface">
+                                          <table className="w-full text-left text-xs border-collapse">
+                                            <thead>
+                                              <tr className="border-b border-border bg-surface-2 text-muted font-bold uppercase tracking-wider text-[10px]">
+                                                <th className="p-2.5 pl-3">SKU</th>
+                                                <th className="p-2.5">ASIN</th>
+                                                <th className="p-2.5">Título do Produto</th>
+                                                <th className="p-2.5 text-center">Quantidade Pedida</th>
+                                                <th className="p-2.5 text-right pr-4">Preço Unitário</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-border">
+                                              {itemsInfo.items.map((it) => (
+                                                <tr key={it.OrderItemId} className="hover:bg-surface-2">
+                                                  <td className="p-2.5 pl-3 font-mono font-medium text-ink select-all">{it.SellerSKU || "-"}</td>
+                                                  <td className="p-2.5 font-mono text-muted select-all">{it.ASIN}</td>
+                                                  <td className="p-2.5 text-ink-2 max-w-[350px] truncate" title={it.Title}>{it.Title || "Nenhum título retornado"}</td>
+                                                  <td className="p-2.5 text-center text-ink font-semibold">{it.QuantityOrdered}</td>
+                                                  <td className="p-2.5 text-right font-mono text-ink-2 pr-4">{formatPrice(it.ItemPrice)}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      ) : (
+                                        <div className="py-4 text-center text-xs text-muted">
+                                          Nenhum item retornado para este pedido.
+                                        </div>
+                                      )
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination */}
+                {ordersNextToken && (
+                  <div className="p-4 border-t border-border bg-surface-2 flex justify-center">
+                    <button 
+                      type="button" 
+                      onClick={() => handleQueryOrders(true)} 
+                      disabled={ordersLoading} 
+                      className="btn btn-ghost px-6 py-2 text-sm flex items-center gap-2"
+                    >
+                      {ordersLoading ? (
+                        <>
+                          <div className="spinner animate-spin"></div>
+                          Carregando mais...
+                        </>
+                      ) : (
+                        <>
+                          Carregar Mais Pedidos
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6"/></svg>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              !ordersLoading && (
+                <div className="card mt-6 p-12 text-center flex flex-col items-center justify-center">
+                  <div className="ok-ico !bg-surface-2 !text-muted">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+                  </div>
+                  <h2 className="text-[14.5px] font-bold text-ink transition-colors">Nenhum pedido encontrado no período</h2>
+                  <p className="text-muted text-[13px] mt-1 max-w-md">Para carregar dados de vendas, configure as credenciais da SP-API, selecione os filtros desejados e clique em "Buscar Pedidos".</p>
+                </div>
+              )
+            )}
+
+            {/* General state skeleton loading during the first query */}
+            {ordersLoading && orders.length === 0 && (
+              <div className="card mt-6 p-12 text-center flex flex-col items-center justify-center gap-3">
+                <span className="relative flex h-6 w-6">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-6 w-6 bg-accent"></span>
+                </span>
+                <h2 className="text-[14px] font-bold text-ink">Buscando pedidos...</h2>
+                <p className="text-xs text-muted">Aguardando resposta da Orders API v0 da Amazon SP-API</p>
+              </div>
+            )}
+          </>
         ) : (
           <div className="card mt-6 p-10 text-center flex flex-col items-center justify-center">
              <div className="ok-ico !bg-surface-2 !text-muted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
              <h2 className="text-[14.5px] font-bold text-ink">Aba em desenvolvimento</h2>
-             <p className="text-muted text-[13px] mt-1">Utilize a aba "Listings / Itens" por enquanto.</p>
+             <p className="text-muted text-[13px] mt-1">Utilize a aba "Listings / Itens" ou "Pedidos" por enquanto.</p>
           </div>
         )}
       </div>
 
-      {selectedResult && <JsonDrawer isOpen={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} data={selectedResult} onToast={displayToast} />}
+      {isDrawerOpen && drawerData && (
+        <JsonDrawer 
+          isOpen={isDrawerOpen} 
+          onClose={() => { setIsDrawerOpen(false); setDrawerData(null); }} 
+          data={drawerData} 
+          title={drawerTitle}
+          onToast={displayToast} 
+        />
+      )}
 
       {/* Toast */}
       <div className={`toast ${showToast ? 'show' : ''}`}>

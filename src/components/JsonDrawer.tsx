@@ -5,9 +5,10 @@ interface JsonDrawerProps {
   onClose: () => void;
   data: any;
   onToast: (msg: string) => void;
+  title?: string;
 }
 
-export function JsonDrawer({ isOpen, onClose, data, onToast }: JsonDrawerProps) {
+export function JsonDrawer({ isOpen, onClose, data, onToast, title }: JsonDrawerProps) {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -50,7 +51,7 @@ export function JsonDrawer({ isOpen, onClose, data, onToast }: JsonDrawerProps) 
       <div className={`overlay ${isOpen ? 'open' : ''}`} onClick={onClose}></div>
       <div className={`drawer ${isOpen ? 'open' : ''}`}>
         <div className="drawer-head">
-          <h3>Catalog Items v2022-04-01</h3>
+          <h3>{title || "Catalog Items v2022-04-01"}</h3>
           <span className="sub">200 OK</span>
           <div className="right">
             <button className="icon-btn" title="Copiar tudo" onClick={handleCopy}>

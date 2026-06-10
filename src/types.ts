@@ -74,3 +74,50 @@ export interface SkuResult {
   errorMsg?: string;
   data?: AmazonListing;
 }
+
+export interface AmazonOrder {
+  AmazonOrderId: string;
+  PurchaseDate: string;
+  LastUpdateDate: string;
+  OrderStatus: "Pending" | "Unshipped" | "PartiallyShipped" | "Shipped" | "Canceled" | "Unfulfilled";
+  FulfillmentChannel?: "AFN" | "MFN";
+  OrderTotal?: {
+    CurrencyCode: string;
+    Amount: string;
+  };
+  NumberOfItemsShipped?: number;
+  NumberOfItemsUnshipped?: number;
+  SalesChannel?: string;
+  OrderType?: string;
+}
+
+export interface OrderItem {
+  ASIN: string;
+  SellerSKU?: string;
+  OrderItemId: string;
+  Title?: string;
+  QuantityOrdered: number;
+  QuantityShipped?: number;
+  ItemPrice?: {
+    CurrencyCode: string;
+    Amount: string;
+  };
+  PromotionDiscount?: {
+    CurrencyCode: string;
+    Amount: string;
+  };
+}
+
+export interface OrdersResponse {
+  Orders: AmazonOrder[];
+  NextToken?: string;
+  LastUpdatedBefore?: string;
+  CreatedBefore?: string;
+}
+
+export interface OrderItemsResponse {
+  OrderItems: OrderItem[];
+  NextToken?: string;
+  AmazonOrderId: string;
+}
+
