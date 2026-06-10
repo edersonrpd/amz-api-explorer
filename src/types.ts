@@ -5,7 +5,13 @@ export interface AmazonCredentials {
 }
 
 export interface ListingParams {
-  sku: string;
+  sku?: string;
+  skus?: string[];
+}
+
+export interface AmazonSearchItemsResponse {
+  items: AmazonListing[];
+  numberOfResults: number;
 }
 
 export interface AppConfig {
@@ -60,4 +66,11 @@ export interface AmazonListing {
   procurementType: any;
   relationships: any[];
   productTypes: any[];
+}
+
+export interface SkuResult {
+  sku: string;
+  status: "pending" | "searching" | "success" | "not_found" | "error";
+  errorMsg?: string;
+  data?: AmazonListing;
 }

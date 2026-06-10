@@ -26,19 +26,30 @@ async function startServer() {
       const { credentials, params } = JSON.parse(decodeURIComponent(decodedStr));
 
       const { accessToken, sellerId, marketplaceId } = credentials;
-      const { sku } = params;
+      const { sku, skus } = params;
 
       const BASE_URL_NA = "https://sellingpartnerapi-na.amazon.com";
       const encodedSellerId = encodeURIComponent(sellerId);
-      const encodedSku = encodeURIComponent(sku);
       
-      const queryParams = new URLSearchParams({
-        marketplaceIds: marketplaceId,
-        includedData: "summaries,attributes,issues,offers,fulfillmentAvailability",
-        issueLocale: "en_US"
-      });
-
-      const url = `${BASE_URL_NA}/listings/2021-08-01/items/${encodedSellerId}/${encodedSku}?${queryParams.toString()}`;
+      let url = "";
+      if (skus && Array.isArray(skus)) {
+        const queryParams = new URLSearchParams({
+          marketplaceIds: marketplaceId,
+          identifiers: skus.join(","),
+          identifiersType: "SKU",
+          includedData: "summaries,attributes,issues,offers,fulfillmentAvailability",
+          pageSize: "20"
+        });
+        url = `${BASE_URL_NA}/listings/2021-08-01/items/${encodedSellerId}?${queryParams.toString()}`;
+      } else {
+        const encodedSku = encodeURIComponent(sku);
+        const queryParams = new URLSearchParams({
+          marketplaceIds: marketplaceId,
+          includedData: "summaries,attributes,issues,offers,fulfillmentAvailability",
+          issueLocale: "en_US"
+        });
+        url = `${BASE_URL_NA}/listings/2021-08-01/items/${encodedSellerId}/${encodedSku}?${queryParams.toString()}`;
+      }
 
       const fetchHeaders = new Headers();
       fetchHeaders.set("x-amz-access-token", accessToken);

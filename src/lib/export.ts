@@ -56,3 +56,43 @@ export const exportListingToExcel = (data: AmazonListing) => {
 
   XLSX.writeFile(wb, `${data.sku}_listing.xlsx`);
 };
+
+export const exportAllListingsToExcel = (results: { sku: string; status: string; errorMsg?: string; data?: any }[]) => {
+  const wb = XLSX.utils.book_new();
+
+  const rows = results.map(r => {
+    const data = r.data || {};
+    const summary = data.summaries?.[0] || {};
+    const attributes = data.attributes || {};
+    const qty = data.fulfillmentAvailability?.[0]?.quantity !== undefined ? data.fulfillmentAvailability[0].quantity : "-";
+    const title = summary.itemName || attributes.item_name?.[0]?.value || "-";
+    const asin = summary.asin || attributes.merchant_suggested_asin?.[0]?.value || "-";
+    const statuses = summary.status?.join(", ") || "-";
+    
+    const priceAttr = attributes.purchasable_offer?.[0];
+    const sellPrice = priceAttr?.our_price?.[0]?.schedule?.[0]?.value_with_tax || data.offers?.[0]?.price?.amount;
+    const priceFormatted = sellPrice !== undefined && sellPrice !== null ? `R$ ${sellPrice.toFixed(2).replace('.', ',')}` : "-";
+
+    let displayStatus = "Pendente";
+    if (r.status === "searching") displayStatus = "Buscando";
+    if (r.status === "success") displayStatus = "Sucesso";
+    if (r.status === "not_found") displayStatus = "Não Encontrado";
+    if (r.status === "error") displayStatus = `Erro`;
+
+    return {
+      "SKU": r.sku,
+      "Título": title,
+      "ASIN": asin,
+      "Preço": priceFormatted,
+      "Estoque": qty,
+      "Status do Anúncio": statuses,
+      "Status da Consulta": displayStatus,
+      "Detalhes do Erro": r.status === "error" || r.status === "not_found" ? r.errorMsg || r.status : ""
+    };
+  });
+
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, sheet, "Resultados");
+
+  XLSX.writeFile(wb, `Amazon_Listings_Batch_${new Date().toISOString().slice(0, 10)}.xlsx`);
+};
