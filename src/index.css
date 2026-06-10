@@ -192,14 +192,12 @@
 
   /* expandable credential drawer */
   .conn-edit{
-    border-top:1px solid var(--border);
+    border-bottom:1px solid var(--border);
     background:var(--surface-2);
-    padding:0 18px;max-height:0;overflow:hidden;
-    transition:max-height .3s ease,padding .3s ease;
+    padding:18px;
   }
-  .conn-edit.open{max-height:240px;padding:18px}
   .conn-edit-grid{
-    display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:14px;align-items:end;
+    display:grid;grid-template-columns:2fr 1fr;gap:14px;align-items:end;
   }
 
   /* ---------- Results header ---------- */

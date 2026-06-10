@@ -20,7 +20,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AmazonListing | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isEditOpen, setIsEditOpen] = useState(false);
 
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
@@ -35,11 +34,10 @@ export default function App() {
     setError(null);
     setResult(null);
 
-    // Fechar credentials se estiver aberto
-    setIsEditOpen(false);
-
     try {
-      const data = await getListingsItem(credentials, { sku: lastSku });
+      // Force marketplace to Brasil
+      const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+      const data = await getListingsItem(fixedCreds, { sku: lastSku });
       setResult(data);
       displayToast(`Item ${lastSku} carregado`);
     } catch (err: any) {
@@ -96,46 +94,9 @@ export default function App() {
         {activeTab === "Listings / Itens" ? (
           <>
             {/* Compact connection bar */}
-            <section className="conn">
-              <div className="conn-row">
-                <div className="conn-status">
-                  <span className="pulse"></span>
-                  <div>
-                    <div className="lbl">Conectado</div>
-                    <div className="sub">Credenciais ativas</div>
-                  </div>
-                </div>
-                <div className="chips">
-                  <span className="chip"><span className="k">Token</span><span className="v">{shortToken}</span></span>
-                  <span className="chip"><span className="k">Seller</span><span className="v">{sellerIdDisp}</span></span>
-                  <span className="chip"><span className="flag"></span><span className="v">{selectedMarketplace}</span></span>
-                </div>
-                <button className="link-btn" onClick={() => setIsEditOpen(!isEditOpen)}>
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                  Editar credenciais
-                </button>
-                <div className="conn-spacer"></div>
-                <form className="conn-query" onSubmit={handleConsult}>
-                  <div className="field" style={{minWidth: "180px"}}>
-                    <label htmlFor="sku">SKU do Produto</label>
-                    <input 
-                      className="input mono" 
-                      id="sku" 
-                      value={lastSku}
-                      onChange={(e) => setLastSku(e.target.value)}
-                      placeholder="SKU"
-                      required
-                    />
-                  </div>
-                  <button type="submit" disabled={isLoading} className="btn btn-primary">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-                    {isLoading ? "Consultando..." : "Consultar Item"}
-                  </button>
-                </form>
-              </div>
-              
-              {/* expandable credentials */}
-              <div className={`conn-edit ${isEditOpen ? 'open' : ''}`}>
+            <section className="conn flex flex-col">
+              {/* credentials */}
+              <div className="conn-edit">
                 <div className="conn-edit-grid">
                   <div className="field">
                     <label>Access Token (LWA)</label>
@@ -156,19 +117,40 @@ export default function App() {
                       placeholder="A1ZR..."
                     />
                   </div>
-                  <div className="field">
-                    <label>Marketplace</label>
-                    <select 
-                      className="input"
-                      value={credentials.marketplaceId}
-                      onChange={e => setCredentials({...credentials, marketplaceId: e.target.value})}
-                    >
-                      {MARKETPLACES.map(m => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
+                </div>
+              </div>
+
+              <div className="conn-row">
+                <div className="conn-status">
+                  <span className="pulse"></span>
+                  <div>
+                    <div className="lbl">Conectado</div>
+                    <div className="sub">Credenciais ativas</div>
                   </div>
                 </div>
+                <div className="chips">
+                  <span className="chip"><span className="k">Token</span><span className="v">{shortToken}</span></span>
+                  <span className="chip"><span className="k">Seller</span><span className="v">{sellerIdDisp}</span></span>
+                  <span className="chip"><span className="flag"></span><span className="v">Brasil (BR)</span></span>
+                </div>
+                <div className="conn-spacer"></div>
+                <form className="conn-query" onSubmit={handleConsult}>
+                  <div className="field" style={{minWidth: "180px"}}>
+                    <label htmlFor="sku">SKU do Produto</label>
+                    <input 
+                      className="input mono" 
+                      id="sku" 
+                      value={lastSku}
+                      onChange={(e) => setLastSku(e.target.value)}
+                      placeholder="SKU"
+                      required
+                    />
+                  </div>
+                  <button type="submit" disabled={isLoading} className="btn btn-primary">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                    {isLoading ? "Consultando..." : "Consultar Item"}
+                  </button>
+                </form>
               </div>
             </section>
 
