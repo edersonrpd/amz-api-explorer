@@ -376,7 +376,7 @@ export default function App() {
           <div className="brand-mark">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="m12 13 0 8"/></svg>
           </div>
-          <span className="brand-name">Amazon <b>Listings</b> Explorer</span>
+          <span className="brand-name">Amazon <b>API</b> Explorer</span>
         </div>
         <span className="topbar-right">SP-API DEV TOOL</span>
       </header>

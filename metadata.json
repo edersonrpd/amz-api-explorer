@@ -1,5 +1,5 @@
 {
-  "name": "Amazon Listings Explorer",
+  "name": "Amazon API Explorer",
   "description": "Visualizador de dados da Amazon Selling Partner API (SP-API)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
