@@ -5,7 +5,9 @@ import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem } f
 import { MARKETPLACES } from "./constants";
 import { ListingResult } from "./components/ListingResult";
 import { JsonDrawer } from "./components/JsonDrawer";
+import { OrderDetailsModal } from "./components/OrderDetailsModal";
 import { exportListingToExcel, exportAllListingsToExcel } from "./lib/export";
+import { MOCK_ORDERS_WITH_ITEMS } from "./mockData";
 
 const ORDER_STATUS_OPTIONS = [
   { id: "Pending", label: "Pendente" },
@@ -18,7 +20,7 @@ const ORDER_STATUS_OPTIONS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState("Listings / Itens");
   
-  const [credentials, setCredentials] = useLocalStorage<AmazonCredentials>("amz_credentials", {
+  const [credentials, setCredentials] = useState<AmazonCredentials>({
     accessToken: "",
     sellerId: "",
     marketplaceId: MARKETPLACES[0].id,
@@ -35,7 +37,9 @@ export default function App() {
   const [drawerTitle, setDrawerTitle] = useState("");
 
   // Orders State
-  const [orders, setOrders] = useState<AmazonOrder[]>([]);
+  const [orders, setOrders] = useState<AmazonOrder[]>(() => {
+    return MOCK_ORDERS_WITH_ITEMS.map(mo => mo.order);
+  });
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [ordersNextToken, setOrdersNextToken] = useState<string | null>(null);
@@ -45,9 +49,16 @@ export default function App() {
     d.setDate(d.getDate() - 30);
     return d.toISOString().slice(0, 10);
   });
-  const [ordersStatuses, setOrdersStatuses] = useState<string[]>(["Unshipped", "Shipped"]);
+  const [ordersStatuses, setOrdersStatuses] = useState<string[]>(["Shipped"]);
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
-  const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
+  const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>(() => {
+    const cache: Record<string, { loading: boolean; items?: OrderItem[]; error?: string }> = {};
+    for (const mo of MOCK_ORDERS_WITH_ITEMS) {
+      cache[mo.order.AmazonOrderId] = { loading: false, items: mo.items };
+    }
+    return cache;
+  });
+  const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
 
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
@@ -177,6 +188,37 @@ export default function App() {
     setIsDrawerOpen(true);
   };
 
+  const STATUS_PT: Record<string, string> = {
+    Shipped: 'ENVIADO',
+    Pending: 'PENDENTE',
+    Unshipped: 'NÃO ENVIADO',
+    PartiallyShipped: 'PARCIAL',
+    Canceled: 'CANCELADO',
+    Delivered: 'ENTREGUE'
+  };
+
+  const TZ = 'America/Sao_Paulo';
+
+  const fmtMoney = (v: any) => {
+    const numVal = parseFloat(v);
+    if (isNaN(numVal)) return "R$ 0,00";
+    return numVal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  };
+
+  const fmtDT = (iso?: string) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('pt-BR', {
+      timeZone: TZ,
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace(',', ' ·');
+  };
+
   const formatPrice = (total: any) => {
     if (!total || total.Amount === undefined) return "-";
     const amt = parseFloat(total.Amount);
@@ -229,32 +271,37 @@ export default function App() {
     }
   };
 
+  const handleLoadOrderItems = async (orderId: string) => {
+    if (ordersItemsCache[orderId]?.items) return;
+    setOrdersItemsCache(prev => ({
+      ...prev,
+      [orderId]: { loading: true }
+    }));
+
+    try {
+      const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+      const response = await getOrderItems(fixedCreds, { orderId });
+      setOrdersItemsCache(prev => ({
+        ...prev,
+        [orderId]: { loading: false, items: response.OrderItems || [] }
+      }));
+    } catch (err: any) {
+      console.error(err);
+      setOrdersItemsCache(prev => ({
+        ...prev,
+        [orderId]: { loading: false, error: err.message || "Erro ao carregar itens." }
+      }));
+    }
+  };
+
   const handleToggleOrderItems = async (orderId: string) => {
     // Toggle expand state
     const isExpanded = !expandedOrders[orderId];
     setExpandedOrders(prev => ({ ...prev, [orderId]: isExpanded }));
 
     // Load items if not cached and going to expand
-    if (isExpanded && !ordersItemsCache[orderId]) {
-      setOrdersItemsCache(prev => ({
-        ...prev,
-        [orderId]: { loading: true }
-      }));
-
-      try {
-        const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
-        const response = await getOrderItems(fixedCreds, { orderId });
-        setOrdersItemsCache(prev => ({
-          ...prev,
-          [orderId]: { loading: false, items: response.OrderItems || [] }
-        }));
-      } catch (err: any) {
-        console.error(err);
-        setOrdersItemsCache(prev => ({
-          ...prev,
-          [orderId]: { loading: false, error: err.message || "Erro ao carregar itens." }
-        }));
-      }
+    if (isExpanded) {
+      await handleLoadOrderItems(orderId);
     }
   };
 
@@ -312,7 +359,6 @@ export default function App() {
                       type="password" 
                       value={credentials.accessToken}
                       onChange={e => setCredentials({...credentials, accessToken: e.target.value})}
-                      placeholder="Atza|IwEBI..."
                     />
                   </div>
                   <div className="field">
@@ -321,7 +367,6 @@ export default function App() {
                       className="input mono" 
                       value={credentials.sellerId}
                       onChange={e => setCredentials({...credentials, sellerId: e.target.value})}
-                      placeholder="A1ZR..."
                     />
                   </div>
                 </div>
@@ -508,7 +553,6 @@ export default function App() {
                       type="password" 
                       value={credentials.accessToken}
                       onChange={e => setCredentials({...credentials, accessToken: e.target.value})}
-                      placeholder="Atza|IwEBI..."
                     />
                   </div>
                   <div className="field">
@@ -517,19 +561,18 @@ export default function App() {
                       className="input mono" 
                       value={credentials.sellerId}
                       onChange={e => setCredentials({...credentials, sellerId: e.target.value})}
-                      placeholder="A1ZR..."
                     />
                   </div>
                 </div>
               </div>
 
               {/* Status and Filters row */}
-              <div className="p-4 border-t border-border flex flex-col md:flex-row gap-4 items-stretch bg-surface-2">
-                <div className="flex flex-wrap gap-4 flex-1">
-                  <div className="field" style={{ minWidth: "160px" }}>
+              <div className="flex flex-col gap-4 p-4 md:p-[16px_18px]">
+                <div className="flex flex-wrap gap-[18px] items-end">
+                  <div className="field">
                     <label>Período</label>
                     <select 
-                      className="input w-full" 
+                      className="input" 
                       value={ordersDatePreset} 
                       onChange={e => setOrdersDatePreset(e.target.value as any)}
                     >
@@ -539,23 +582,29 @@ export default function App() {
                       <option value="custom">Data customizada</option>
                     </select>
                   </div>
+                  <div className="field">
+                    <label>A partir de</label>
+                    <input 
+                      type="date" 
+                      className="input" 
+                      value={ordersCustomDate} 
+                      onChange={e => setOrdersCustomDate(e.target.value)} 
+                      disabled={ordersDatePreset !== "custom"}
+                    />
+                  </div>
+                </div>
 
-                  {ordersDatePreset === "custom" && (
-                    <div className="field" style={{ minWidth: "160px" }}>
-                      <label>A partir de</label>
-                      <input 
-                        type="date" 
-                        className="input w-full" 
-                        value={ordersCustomDate} 
-                        onChange={e => setOrdersCustomDate(e.target.value)} 
-                      />
-                    </div>
-                  )}
-
-                  <div className="field flex-1" style={{ minWidth: "250px" }}>
+                <div className="flex flex-wrap gap-[18px] items-end">
+                  <div className="field">
                     <label>Status do Pedido</label>
-                    <div className="flex gap-1.5 flex-wrap items-center mt-1">
-                      {ORDER_STATUS_OPTIONS.map(opt => {
+                    <div className="status-pills">
+                      {[
+                        { id: "Pending", label: "Pendente" },
+                        { id: "Unshipped", label: "Não enviado" },
+                        { id: "PartiallyShipped", label: "Parcialmente enviado" },
+                        { id: "Shipped", label: "Enviado" },
+                        { id: "Canceled", label: "Cancelado" }
+                      ].map(opt => {
                         const isChecked = ordersStatuses.includes(opt.id);
                         return (
                           <button
@@ -568,11 +617,7 @@ export default function App() {
                                 setOrdersStatuses([...ordersStatuses, opt.id]);
                               }
                             }}
-                            className={`chip cursor-pointer text-xs font-semibold uppercase px-2 py-0.5 border ${
-                              isChecked 
-                                ? 'bg-[#e1f5fe] border-[#0288d1] text-[#0288d1] font-bold' 
-                                : 'bg-surface border-border text-muted hover:text-ink'
-                            }`}
+                            className={`spill ${isChecked ? 'on' : ''}`}
                           >
                             {opt.label}
                           </button>
@@ -580,15 +625,14 @@ export default function App() {
                       })}
                     </div>
                   </div>
-                </div>
 
-                <div className="flex items-end">
+                  <div className="flex-1"></div>
+
                   <button 
                     type="button" 
                     onClick={() => handleQueryOrders(false)} 
                     disabled={ordersLoading} 
-                    className="btn btn-primary w-full md:w-auto flex items-center justify-center gap-2" 
-                    style={{ height: "42px" }}
+                    className="btn btn-primary"
                   >
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
                     {ordersLoading && orders.length === 0 ? "Buscando..." : "Buscar Pedidos"}
@@ -607,173 +651,82 @@ export default function App() {
 
             {/* Orders List Container */}
             {orders.length > 0 ? (
-              <div className="card mt-6 overflow-hidden">
-                <div className="border-b border-border p-4 bg-surface flex items-center justify-between">
-                  <h3 className="text-[13.5px] font-bold text-ink flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-                    Pedidos Encontrados ({orders.length})
-                  </h3>
-                  <span className="text-xs text-muted">Selecione um pedido para visualizar os itens</span>
+              <section className="card mt-6">
+                <div className="card-head">
+                  <span className="ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M16 3h5v5" />
+                      <path d="M8 3H3v5" />
+                      <path d="M3 16v5h5" />
+                      <path d="M21 16v5h-5" />
+                      <rect x="8" y="8" width="8" height="8" rx="1" />
+                    </svg>
+                  </span>
+                  <h2>
+                    Pedidos Encontrados <span style={{ color: "var(--muted)", fontWeight: 600 }}>({orders.length})</span>
+                  </h2>
+                  <span className="hint">Clique em um pedido para ver os detalhes completos</span>
                 </div>
                 
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-[13px]">
+                  <table className="orders">
                     <thead>
-                      <tr className="border-b border-border bg-surface-2 text-muted text-xs font-semibold uppercase tracking-wider">
-                        <th className="p-3 w-10"></th>
-                        <th className="p-3">ID do Pedido (Amazon)</th>
-                        <th className="p-3">Data de Compra</th>
-                        <th className="p-3">Status</th>
-                        <th className="p-3">Canal de Envio</th>
-                        <th className="p-3">Itens</th>
-                        <th className="p-3">Total do Pedido</th>
-                        <th className="p-3 text-right" style={{ paddingRight: "16px" }}>Ações</th>
+                      <tr>
+                        <th>ID do Pedido (Amazon)</th>
+                        <th>Data de Compra</th>
+                        <th>Status</th>
+                        <th>Canal</th>
+                        <th>Itens</th>
+                        <th style={{ textAlign: 'right' }}>Total</th>
+                        <th></th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border">
+                    <tbody>
                       {orders.map((ord) => {
-                        const isExpanded = !!expandedOrders[ord.AmazonOrderId];
-                        const itemsInfo = ordersItemsCache[ord.AmazonOrderId];
+                        const statusLabelPT = STATUS_PT[ord.OrderStatus] || ord.OrderStatus;
                         
-                        const purchaseDateObj = new Date(ord.PurchaseDate);
-                        const formattedDate = isNaN(purchaseDateObj.getTime())
-                          ? ord.PurchaseDate
-                          : purchaseDateObj.toLocaleDateString("pt-BR", {
-                              day: "2-digit",
-                              month: "2-digit",
-                              year: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit"
-                            });
+                        let badgeClass = "badge green";
+                        if (ord.OrderStatus === "Pending" || ord.OrderStatus === "PartiallyShipped") {
+                          badgeClass = "badge blue";
+                        } else if (ord.OrderStatus === "Canceled" || ord.OrderStatus === "Unshipped" || ord.OrderStatus === "Unfulfilled") {
+                          badgeClass = "badge gray";
+                        }
 
-                        // Badges for status
-                        let statusColorClass = "bg-gray-10 text-gray-700";
-                        if (ord.OrderStatus === "Pending") statusColorClass = "bg-[#fff9c4] text-[#f57f17] border-[#fbc02d]";
-                        if (ord.OrderStatus === "Unshipped") statusColorClass = "bg-[#e3f2fd] text-[#0d47a1] border-[#90caf9]";
-                        if (ord.OrderStatus === "PartiallyShipped") statusColorClass = "bg-[#f3e5f5] text-[#4a148c] border-[#ce93d8]";
-                        if (ord.OrderStatus === "Shipped") statusColorClass = "bg-[#e8f5e9] text-[#1b5e20] border-[#a5d6a7]";
-                        if (ord.OrderStatus === "Canceled") statusColorClass = "bg-[#ffebee] text-[#b71c1c] border-[#ef9a9a]";
+                        const purchaseDateLabel = fmtDT(ord.PurchaseDate);
+                        const valTotal = ord.OrderTotal?.Amount ? fmtMoney(ord.OrderTotal.Amount) : "R$ 0,00";
+
+                        const shippedCount = ord.NumberOfItemsShipped || 0;
+                        const unshippedCount = ord.NumberOfItemsUnshipped || 0;
+                        const itemsTxt = `${shippedCount} env. / ${unshippedCount} pend.`;
+
+                        const channelLabel = ord.FulfillmentChannel === "AFN" 
+                          ? "FBA / AFN" 
+                          : ord.FulfillmentChannel === "MFN" 
+                            ? "FBM / MFN" 
+                            : `FBM / ${ord.FulfillmentChannel || 'MFN'}`;
 
                         return (
-                          <span key={ord.AmazonOrderId} className="contents">
-                            <tr 
-                              onClick={() => handleToggleOrderItems(ord.AmazonOrderId)}
-                              className={`hover:bg-surface-2 cursor-pointer transition-colors ${isExpanded ? 'bg-accent/5' : ''}`}
-                            >
-                              <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
-                                <button 
-                                  onClick={() => handleToggleOrderItems(ord.AmazonOrderId)}
-                                  className="text-muted hover:text-ink w-6 h-6 flex items-center justify-center rounded-full hover:bg-surface-3 transition-colors"
-                                >
-                                  <svg 
-                                    viewBox="0 0 24 24" 
-                                    width="16" 
-                                    height="16" 
-                                    fill="none" 
-                                    stroke="currentColor" 
-                                    strokeWidth="2.5" 
-                                    className={`transform transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                                  >
-                                    <path d="m9 18 6-6-6-6"/>
-                                  </svg>
-                                </button>
-                              </td>
-                              <td className="p-3 font-semibold font-mono text-ink select-all">{ord.AmazonOrderId}</td>
-                              <td className="p-3 text-ink-2">{formattedDate}</td>
-                              <td className="p-3">
-                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase ${statusColorClass}`}>
-                                  {ord.OrderStatus === "Pending" && "Pendente"}
-                                  {ord.OrderStatus === "Unshipped" && "Não Enviado"}
-                                  {ord.OrderStatus === "PartiallyShipped" && "Enviado Parcialmente"}
-                                  {ord.OrderStatus === "Shipped" && "Enviado"}
-                                  {ord.OrderStatus === "Canceled" && "Cancelado"}
-                                  {ord.OrderStatus !== "Pending" && ord.OrderStatus !== "Unshipped" && ord.OrderStatus !== "PartiallyShipped" && ord.OrderStatus !== "Shipped" && ord.OrderStatus !== "Canceled" && ord.OrderStatus}
-                                </span>
-                              </td>
-                              <td className="p-3">
-                                {ord.FulfillmentChannel === "AFN" ? (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#efebe9] text-[#5d4037] uppercase">FBA / AFN</span>
-                                ) : ord.FulfillmentChannel === "MFN" ? (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#eceff1] text-[#37474f] uppercase">FBM / MFN</span>
-                                ) : (
-                                  <span className="text-muted">-</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-ink-2">
-                                <span className="font-medium text-ink">{ord.NumberOfItemsShipped || 0}</span> enviado{ord.NumberOfItemsShipped !== 1 ? 's' : ''} / <span className="font-medium text-ink">{ord.NumberOfItemsUnshipped || 0}</span> pendente{ord.NumberOfItemsUnshipped !== 1 ? 's' : ''}
-                              </td>
-                              <td className="p-3 font-mono font-bold text-ink">{formatPrice(ord.OrderTotal)}</td>
-                              <td className="p-3 text-right" style={{ paddingRight: "16px" }} onClick={(e) => e.stopPropagation()}>
-                                <button 
-                                  className="btn btn-ghost font-semibold text-accent" 
-                                  style={{ padding: "4px 8px", fontSize: "11px" }}
-                                  onClick={() => openJsonDrawer(ord, `Pedido: ${ord.AmazonOrderId}`)}
-                                >
-                                  Ver JSON
-                                </button>
-                              </td>
-                            </tr>
-
-                            {/* Expanded items section */}
-                            {isExpanded && (
-                              <tr>
-                                <td colSpan={8} className="p-0 bg-surface">
-                                  <div className="border-l-4 border-l-accent bg-surface-2 p-4 m-3 rounded shadow-sm border border-border">
-                                    <h4 className="text-xs font-bold text-ink uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
-                                      Itens do Pedido ({ord.AmazonOrderId})
-                                    </h4>
-
-                                    {itemsInfo?.loading && (
-                                      <div className="py-6 flex items-center justify-center gap-2 text-muted text-xs font-semibold">
-                                        <div className="spinner animate-spin"></div>
-                                        <span>Carregando itens da Amazon SP-API...</span>
-                                      </div>
-                                    )}
-
-                                    {itemsInfo?.error && (
-                                      <div className="p-3 bg-red-10 border border-red-200 text-red-700 text-xs rounded font-mono">
-                                        <strong>Erro ao carregar itens:</strong> {itemsInfo.error}
-                                      </div>
-                                    )}
-
-                                    {itemsInfo && !itemsInfo.loading && !itemsInfo.error && (
-                                      itemsInfo.items && itemsInfo.items.length > 0 ? (
-                                        <div className="overflow-hidden rounded border border-border bg-surface">
-                                          <table className="w-full text-left text-xs border-collapse">
-                                            <thead>
-                                              <tr className="border-b border-border bg-surface-2 text-muted font-bold uppercase tracking-wider text-[10px]">
-                                                <th className="p-2.5 pl-3">SKU</th>
-                                                <th className="p-2.5">ASIN</th>
-                                                <th className="p-2.5">Título do Produto</th>
-                                                <th className="p-2.5 text-center">Quantidade Pedida</th>
-                                                <th className="p-2.5 text-right pr-4">Preço Unitário</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-border">
-                                              {itemsInfo.items.map((it) => (
-                                                <tr key={it.OrderItemId} className="hover:bg-surface-2">
-                                                  <td className="p-2.5 pl-3 font-mono font-medium text-ink select-all">{it.SellerSKU || "-"}</td>
-                                                  <td className="p-2.5 font-mono text-muted select-all">{it.ASIN}</td>
-                                                  <td className="p-2.5 text-ink-2 max-w-[350px] truncate" title={it.Title}>{it.Title || "Nenhum título retornado"}</td>
-                                                  <td className="p-2.5 text-center text-ink font-semibold">{it.QuantityOrdered}</td>
-                                                  <td className="p-2.5 text-right font-mono text-ink-2 pr-4">{formatPrice(it.ItemPrice)}</td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      ) : (
-                                        <div className="py-4 text-center text-xs text-muted">
-                                          Nenhum item retornado para este pedido.
-                                        </div>
-                                      )
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </span>
+                          <tr 
+                            key={ord.AmazonOrderId} 
+                            className="row" 
+                            onClick={() => setSelectedOrderForModal(ord)}
+                          >
+                            <td><span className="oid">{ord.AmazonOrderId}</span></td>
+                            <td className="odate">{purchaseDateLabel}</td>
+                            <td><span className={badgeClass}>{statusLabelPT}</span></td>
+                            <td><span className="chan">{channelLabel}</span></td>
+                            <td style={{ color: 'var(--ink-2)' }}>{itemsTxt}</td>
+                            <td className="ototal" style={{ textAlign: 'right' }}>{valTotal}</td>
+                            <td style={{ textAlign: 'right' }}>
+                              <span className="openlbl">
+                                Abrir
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M7 17 17 7" strokeLinecap="round" strokeLinejoin="round" />
+                                  <path d="M7 7h10v10" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              </span>
+                            </td>
+                          </tr>
                         );
                       })}
                     </tbody>
@@ -785,7 +738,7 @@ export default function App() {
                   <div className="p-4 border-t border-border bg-surface-2 flex justify-center">
                     <button 
                       type="button" 
-                      onClick={() => handleQueryOrders(true)} 
+                      onClick={() => handleQueryOrders(true)}  
                       disabled={ordersLoading} 
                       className="btn btn-ghost px-6 py-2 text-sm flex items-center gap-2"
                     >
@@ -803,7 +756,7 @@ export default function App() {
                     </button>
                   </div>
                 )}
-              </div>
+              </section>
             ) : (
               !ordersLoading && (
                 <div className="card mt-6 p-12 text-center flex flex-col items-center justify-center">
@@ -844,6 +797,17 @@ export default function App() {
           data={drawerData} 
           title={drawerTitle}
           onToast={displayToast} 
+        />
+      )}
+
+      {selectedOrderForModal && (
+        <OrderDetailsModal
+          isOpen={!!selectedOrderForModal}
+          onClose={() => setSelectedOrderForModal(null)}
+          order={selectedOrderForModal}
+          itemsCacheEntry={ordersItemsCache[selectedOrderForModal.AmazonOrderId]}
+          onLoadItems={handleLoadOrderItems}
+          onToast={displayToast}
         />
       )}
 

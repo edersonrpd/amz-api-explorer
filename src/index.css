@@ -472,5 +472,56 @@
     .price-sep{display:none}
     .conn-edit-grid{grid-template-columns:1fr}
   }
+
+  /* Status pills and spill for filter bar */
+  .status-pills{display:flex;gap:7px;flex-wrap:wrap}
+  .spill{
+    border:1px solid var(--border-strong);background:var(--surface);
+    border-radius:20px;padding:6px 13px;font-size:11.5px;font-weight:700;
+    color:var(--muted);letter-spacing:.02em;transition:.15s;
+    cursor:pointer;
+  }
+  .spill:hover{border-color:var(--muted-2);color:var(--ink-2)}
+  .spill.on{border-color:var(--blue);color:var(--blue);background:var(--blue-soft)}
+
+  /* Custom Orders Table styles from Pedidos.html */
+  table.orders{width:100%;border-collapse:collapse}
+  .orders th{
+    text-align:left;font-size:10.5px;font-weight:700;color:var(--muted-2);
+    text-transform:uppercase;letter-spacing:.07em;
+    padding:12px 16px;border-bottom:1px solid var(--border);
+    background:var(--surface-2);
+  }
+  .orders td{padding:14px 16px;border-bottom:1px solid var(--border);font-size:13.5px;vertical-align:middle}
+  .orders tr.row{cursor:pointer;transition:background .12s}
+  .orders tr.row:hover{background:#fbf7ef}
+  .orders tr.row:last-child td{border-bottom:none}
+  .oid{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--navy-700)}
+  .odate{color:var(--ink-2)}
+  
+  /* Badge styling compatibility overrides */
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;
+    letter-spacing:.04em;border-radius:6px;padding:4px 9px;font-family:var(--font-mono);
+  }
+  .badge::before{content:"";width:6px;height:6px;border-radius:50%}
+  .badge.green{background:var(--green-soft);color:#0f7a4f;border:none;}
+  .badge.green::before{background:var(--green)}
+  .badge.blue{background:var(--blue-soft);color:#1d52c4;border:none;}
+  .badge.blue::before{background:var(--blue)}
+  .badge.gray{background:#f1f3f7;color:var(--muted);border:none;}
+  .badge.gray::before{background:var(--muted-2)}
+  
+  .chan{
+    font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-2);
+    background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:3px 8px;
+  }
+  .ototal{font-family:var(--font-mono);font-weight:600;color:var(--ink);white-space:nowrap}
+  .openlbl{
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:12px;font-weight:700;color:var(--blue);opacity:0;transition:opacity .15s;
+  }
+  tr.row:hover .openlbl{opacity:1}
+  .openlbl svg{width:13px;height:13px}
 }
 
