@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { AmazonOrder, OrderItem } from "../types";
+import { AmazonOrder, OrderItem, OrderFinancesResponse, ShipmentEvent, OrderMoney } from "../types";
 
 interface OrderDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
   order: AmazonOrder & Record<string, any>; // Support dynamic extra fields from JSON
   itemsCacheEntry?: { loading: boolean; items?: OrderItem[]; error?: string };
+  financesCacheEntry?: { loading: boolean; finances?: OrderFinancesResponse; error?: string };
   onLoadItems: (orderId: string) => void;
+  onLoadFinances: (orderId: string) => void;
   onToast: (msg: string) => void;
 }
 
@@ -66,6 +68,138 @@ const STATUS_PT: Record<string, string> = {
   Delivered: 'ENTREGUE'
 };
 
+const CHARGE_TYPE_PT: Record<string, string> = {
+  Principal: 'Preço do produto (Principal)',
+  Tax: 'Imposto sobre o produto',
+  ShippingCharge: 'Frete cobrado do cliente',
+  ShippingTax: 'Imposto sobre o frete',
+  GiftWrap: 'Embalagem para presente',
+  GiftWrapTax: 'Imposto sobre embalagem',
+  Goodwill: 'Cortesia / Goodwill',
+  Discount: 'Desconto',
+  RestockingFee: 'Taxa de reposição de estoque',
+  ReturnShipping: 'Frete de devolução',
+  PointsFee: 'Taxa de pontos',
+  GenericDeduction: 'Dedução genérica',
+  FreeReplacementReturnShipping: 'Frete de devolução (reposição gratuita)',
+  PaymentMethodFee: 'Taxa do método de pagamento',
+  ExportCharge: 'Encargo de exportação',
+  'MarketplaceFacilitatorTax-Principal': 'Imposto retido pela Amazon (produto)',
+  'MarketplaceFacilitatorTax-Shipping': 'Imposto retido pela Amazon (frete)',
+  'MarketplaceFacilitatorVAT-Principal': 'VAT retido pela Amazon (produto)',
+  'MarketplaceFacilitatorVAT-Shipping': 'VAT retido pela Amazon (frete)'
+};
+
+const FEE_TYPE_PT: Record<string, string> = {
+  Commission: 'Comissão da Amazon (referral fee)',
+  FixedClosingFee: 'Tarifa fixa de fechamento',
+  VariableClosingFee: 'Tarifa variável de fechamento',
+  RefundCommission: 'Comissão retida sobre reembolso',
+  FBAPerUnitFulfillmentFee: 'Tarifa de logística FBA (por unidade)',
+  FBAPerOrderFulfillmentFee: 'Tarifa de logística FBA (por pedido)',
+  FBAWeightBasedFee: 'Tarifa FBA baseada em peso',
+  FBAStorageFee: 'Tarifa de armazenagem FBA',
+  ShippingChargeback: 'Estorno de frete (chargeback)',
+  ShippingHB: 'Frete (shipping holdback)',
+  GiftwrapChargeback: 'Estorno de embalagem para presente',
+  SalesTaxCollectionFee: 'Taxa de coleta de imposto',
+  DigitalServicesFee: 'Taxa de serviços digitais',
+  PerItemFee: 'Tarifa por item (plano individual)',
+  TechnologyFee: 'Taxa de tecnologia',
+  HighVolumeListingFee: 'Taxa de listagem de alto volume'
+};
+
+const FIN_EVENT_GROUP_PT: Record<string, string> = {
+  ShipmentEventList: 'Envio (Shipment)',
+  RefundEventList: 'Reembolso (Refund)',
+  GuaranteeClaimEventList: 'Garantia A-a-Z (Claim)',
+  ChargebackEventList: 'Chargeback'
+};
+
+const finLabel = (dict: Record<string, string>, code?: string) => {
+  if (!code) return '—';
+  return dict[code] || code;
+};
+
+const moneyOf = (m?: OrderMoney) => {
+  if (!m || m.Amount === undefined) return 0;
+  const v = parseFloat(m.Amount);
+  return isNaN(v) ? 0 : v;
+};
+
+interface FinRow {
+  group: string;      // ex: Envio (Shipment), Reembolso (Refund)
+  category: 'Crédito' | 'Taxa Amazon' | 'Promoção' | 'Imposto retido';
+  sku: string;
+  typeCode: string;
+  typeLabel: string;
+  amount: number;
+}
+
+// Flatten financial events (charges, fees, promotions, withheld taxes) into table rows
+function buildFinRows(events: ShipmentEvent[], groupLabel: string): FinRow[] {
+  const rows: FinRow[] = [];
+  for (const ev of events) {
+    const itemLists = [...(ev.ShipmentItemList || []), ...(ev.ShipmentItemAdjustmentList || [])];
+    for (const it of itemLists) {
+      const sku = it.SellerSKU || '—';
+      for (const c of [...(it.ItemChargeList || []), ...(it.ItemChargeAdjustmentList || [])]) {
+        rows.push({
+          group: groupLabel,
+          category: 'Crédito',
+          sku,
+          typeCode: c.ChargeType || '—',
+          typeLabel: finLabel(CHARGE_TYPE_PT, c.ChargeType),
+          amount: c.ChargeAmount?.CurrencyAmount ?? 0
+        });
+      }
+      for (const f of [...(it.ItemFeeList || []), ...(it.ItemFeeAdjustmentList || [])]) {
+        rows.push({
+          group: groupLabel,
+          category: 'Taxa Amazon',
+          sku,
+          typeCode: f.FeeType || '—',
+          typeLabel: finLabel(FEE_TYPE_PT, f.FeeType),
+          amount: f.FeeAmount?.CurrencyAmount ?? 0
+        });
+      }
+      for (const p of [...(it.PromotionList || []), ...(it.PromotionAdjustmentList || [])]) {
+        rows.push({
+          group: groupLabel,
+          category: 'Promoção',
+          sku,
+          typeCode: p.PromotionId || p.PromotionType || '—',
+          typeLabel: p.PromotionType ? `Promoção (${p.PromotionType})` : 'Promoção',
+          amount: p.PromotionAmount?.CurrencyAmount ?? 0
+        });
+      }
+      for (const tw of it.ItemTaxWithheldList || []) {
+        for (const t of tw.TaxesWithheld || []) {
+          rows.push({
+            group: groupLabel,
+            category: 'Imposto retido',
+            sku,
+            typeCode: t.ChargeType || '—',
+            typeLabel: finLabel(CHARGE_TYPE_PT, t.ChargeType),
+            amount: t.ChargeAmount?.CurrencyAmount ?? 0
+          });
+        }
+      }
+    }
+    for (const f of [...(ev.ShipmentFeeList || []), ...(ev.OrderFeeList || [])]) {
+      rows.push({
+        group: groupLabel,
+        category: 'Taxa Amazon',
+        sku: '— (nível do pedido)',
+        typeCode: f.FeeType || '—',
+        typeLabel: finLabel(FEE_TYPE_PT, f.FeeType),
+        amount: f.FeeAmount?.CurrencyAmount ?? 0
+      });
+    }
+  }
+  return rows;
+}
+
 function highlight(obj: any) {
   let json = JSON.stringify(obj, null, 2);
   json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -119,7 +253,9 @@ export function OrderDetailsModal({
   onClose,
   order,
   itemsCacheEntry,
+  financesCacheEntry,
   onLoadItems,
+  onLoadFinances,
   onToast
 }: OrderDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<"detail" | "json">("detail");
@@ -130,6 +266,9 @@ export function OrderDetailsModal({
       // Load items immediately if not already in cache and not loading
       if (!itemsCacheEntry) {
         onLoadItems(order.AmazonOrderId);
+      }
+      if (!financesCacheEntry) {
+        onLoadFinances(order.AmazonOrderId);
       }
     }
   }, [isOpen, order.AmazonOrderId]);
@@ -308,7 +447,10 @@ export function OrderDetailsModal({
                           <th>ASIN</th>
                           <th>Título do Produto</th>
                           <th style={{ textAlign: 'right' }}>Qtd.</th>
-                          <th style={{ textAlign: 'right' }}>Preço Unit.</th>
+                          <th style={{ textAlign: 'right' }}>Preço</th>
+                          <th style={{ textAlign: 'right' }}>Frete</th>
+                          <th style={{ textAlign: 'right' }}>Descontos</th>
+                          <th style={{ textAlign: 'right' }}>Impostos</th>
                         </tr>
                       </thead>
                       <tbody id="mItems">
@@ -319,6 +461,9 @@ export function OrderDetailsModal({
                             const title = it.Title || (it as any).title || "Nenhum título retornado";
                             const qty = it.QuantityOrdered !== undefined ? it.QuantityOrdered : ((it as any).qty !== undefined ? (it as any).qty : 0);
                             const price = it.ItemPrice?.Amount !== undefined ? it.ItemPrice.Amount : ((it as any).price !== undefined ? (it as any).price : 0);
+                            const shipping = moneyOf(it.ShippingPrice);
+                            const discounts = moneyOf(it.PromotionDiscount) + moneyOf(it.ShippingDiscount);
+                            const taxes = moneyOf(it.ItemTax) + moneyOf(it.ShippingTax);
 
                             return (
                               <tr key={idx}>
@@ -327,12 +472,17 @@ export function OrderDetailsModal({
                                 <td>{title}</td>
                                 <td className="num">{qty}</td>
                                 <td className="num">{fmtMoney(price)}</td>
+                                <td className="num">{fmtMoney(shipping)}</td>
+                                <td className="num" style={discounts > 0 ? { color: '#c62828' } : undefined}>
+                                  {discounts > 0 ? `- ${fmtMoney(discounts)}` : fmtMoney(0)}
+                                </td>
+                                <td className="num">{fmtMoney(taxes)}</td>
                               </tr>
                             );
                           })
                         ) : (
                           <tr>
-                            <td colSpan={5} style={{ textAlign: 'center', padding: '16px', color: 'var(--muted)' }}>
+                            <td colSpan={8} style={{ textAlign: 'center', padding: '16px', color: 'var(--muted)' }}>
                               Nenhum item retornado para este pedido.
                             </td>
                           </tr>
@@ -340,6 +490,141 @@ export function OrderDetailsModal({
                       </tbody>
                     </table>
                   )}
+                </div>
+
+                {/* FINANCES / FEES PANEL */}
+                <div className="panel full">
+                  <div className="panel-head">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8" />
+                      <path d="M12 18V6" />
+                    </svg>
+                    <h3>Custos e Taxas da Amazon (Finances API)</h3>
+                  </div>
+
+                  {financesCacheEntry?.loading && (
+                    <div className="p-8 text-center text-xs text-muted font-semibold flex items-center justify-center gap-2">
+                      <span className="w-5 h-5 border-2 border-accent border-t-transparent animate-spin rounded-full"></span>
+                      Carregando eventos financeiros da Amazon SP-API...
+                    </div>
+                  )}
+
+                  {financesCacheEntry?.error && (
+                    <div className="p-5 text-xs font-mono text-red-600 bg-red-50 border-b border-red-200">
+                      <strong>Erro ao carregar dados financeiros:</strong> {financesCacheEntry.error}
+                    </div>
+                  )}
+
+                  {!financesCacheEntry?.loading && !financesCacheEntry?.error && (() => {
+                    const fe = financesCacheEntry?.finances?.FinancialEvents || {};
+                    const finRows: FinRow[] = [
+                      ...buildFinRows(fe.ShipmentEventList || [], FIN_EVENT_GROUP_PT.ShipmentEventList),
+                      ...buildFinRows(fe.RefundEventList || [], FIN_EVENT_GROUP_PT.RefundEventList),
+                      ...buildFinRows(fe.GuaranteeClaimEventList || [], FIN_EVENT_GROUP_PT.GuaranteeClaimEventList),
+                      ...buildFinRows(fe.ChargebackEventList || [], FIN_EVENT_GROUP_PT.ChargebackEventList)
+                    ];
+
+                    if (finRows.length === 0) {
+                      return (
+                        <div className="p-6 text-center text-xs text-muted font-semibold">
+                          Nenhum evento financeiro disponível para este pedido ainda.
+                          <br />
+                          <span className="font-normal">
+                            As taxas só são registradas pela Amazon após a cobrança/envio do pedido
+                            (pedidos Pendentes/Não Enviados ainda não possuem eventos financeiros).
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    const sumBy = (cat: FinRow['category']) =>
+                      finRows.filter(r => r.category === cat).reduce((acc, r) => acc + r.amount, 0);
+                    const totalCharges = sumBy('Crédito');
+                    const totalFees = sumBy('Taxa Amazon');
+                    const totalPromos = sumBy('Promoção');
+                    const totalWithheld = sumBy('Imposto retido');
+                    const netTotal = finRows.reduce((acc, r) => acc + r.amount, 0);
+
+                    const postedDates = Array.from(new Set(
+                      [...(fe.ShipmentEventList || []), ...(fe.RefundEventList || [])]
+                        .map(ev => ev.PostedDate)
+                        .filter(Boolean)
+                    )) as string[];
+
+                    const catColor = (cat: FinRow['category']) => {
+                      if (cat === 'Taxa Amazon') return '#c62828';
+                      if (cat === 'Promoção') return '#e8861a';
+                      if (cat === 'Imposto retido') return '#6a1b9a';
+                      return '#0f7a4f';
+                    };
+
+                    return (
+                      <>
+                        <table className="items-tbl">
+                          <thead>
+                            <tr>
+                              <th>Evento</th>
+                              <th>Categoria</th>
+                              <th>Descrição</th>
+                              <th>Código (SP-API)</th>
+                              <th>SKU</th>
+                              <th style={{ textAlign: 'right' }}>Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {finRows.map((r, idx) => (
+                              <tr key={idx}>
+                                <td style={{ fontSize: '12px' }}>{r.group}</td>
+                                <td>
+                                  <span style={{ color: catColor(r.category), fontWeight: 700, fontSize: '12px' }}>
+                                    {r.category}
+                                  </span>
+                                </td>
+                                <td>{r.typeLabel}</td>
+                                <td className="mono">{r.typeCode}</td>
+                                <td className="mono">{r.sku}</td>
+                                <td className="num" style={{ color: r.amount < 0 ? '#c62828' : 'var(--ink)' }}>
+                                  {fmtMoney(r.amount)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ background: 'var(--surface-2)' }}>
+                              <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Total cobrado do cliente (créditos)</td>
+                              <td className="num" style={{ fontWeight: 700 }}>{fmtMoney(totalCharges)}</td>
+                            </tr>
+                            <tr style={{ background: 'var(--surface-2)' }}>
+                              <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Total de taxas da Amazon</td>
+                              <td className="num" style={{ fontWeight: 700, color: '#c62828' }}>{fmtMoney(totalFees)}</td>
+                            </tr>
+                            {totalPromos !== 0 && (
+                              <tr style={{ background: 'var(--surface-2)' }}>
+                                <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Total de promoções</td>
+                                <td className="num" style={{ fontWeight: 700, color: '#e8861a' }}>{fmtMoney(totalPromos)}</td>
+                              </tr>
+                            )}
+                            {totalWithheld !== 0 && (
+                              <tr style={{ background: 'var(--surface-2)' }}>
+                                <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Impostos retidos pela Amazon</td>
+                                <td className="num" style={{ fontWeight: 700, color: '#6a1b9a' }}>{fmtMoney(totalWithheld)}</td>
+                              </tr>
+                            )}
+                            <tr style={{ background: 'var(--green-soft)' }}>
+                              <td colSpan={5} style={{ textAlign: 'right', fontWeight: 800, fontSize: '12.5px' }}>Valor líquido do vendedor (estimado)</td>
+                              <td className="num" style={{ fontWeight: 800, color: '#0f7a4f', fontSize: '14px' }}>{fmtMoney(netTotal)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                        {postedDates.length > 0 && (
+                          <div className="px-4 py-2 text-[11px] text-muted border-t border-border">
+                            Lançamento(s) registrado(s) em: {postedDates.map(d => fmtDT(d)).join(' · ')}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {/* TIMELINE PANEL */}
@@ -498,6 +783,34 @@ export function OrderDetailsModal({
                   <pre id="mJson" dangerouslySetInnerHTML={{ __html: highlight(order) }} />
                 </div>
               </div>
+              {financesCacheEntry?.finances && (
+                <div className="json-pane" style={{ marginTop: '14px' }}>
+                  <div className="json-bar">
+                    <span className="t">listFinancialEventsByOrderId · {order.AmazonOrderId}</span>
+                    <div className="right">
+                      <button
+                        className="m-copy-btn"
+                        onClick={() => {
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(JSON.stringify(financesCacheEntry.finances, null, 2));
+                            onToast("JSON financeiro copiado!");
+                          }
+                        }}
+                        title="Copiar JSON financeiro"
+                        style={{ borderColor: 'rgba(255,255,255,.16)' }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect width="13" height="13" x="9" y="9" rx="2" />
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="json-scroll">
+                    <pre dangerouslySetInnerHTML={{ __html: highlight(financesCacheEntry.finances) }} />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -1,7 +1,7 @@
 import { useState, FormEvent, useEffect } from "react";
-import { getListingsItem, searchListingsItems, getOrders, getOrderItems } from "./services/amazonService";
+import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances } from "./services/amazonService";
 import { useLocalStorage } from "./hooks/useLocalStorage";
-import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem } from "./types";
+import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem, OrderFinancesResponse } from "./types";
 import { MARKETPLACES } from "./constants";
 import { ListingResult } from "./components/ListingResult";
 import { JsonDrawer } from "./components/JsonDrawer";
@@ -48,6 +48,7 @@ export default function App() {
   const [ordersNotFoundIds, setOrdersNotFoundIds] = useState<string[]>([]);
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
+  const [ordersFinancesCache, setOrdersFinancesCache] = useState<Record<string, { loading: boolean; finances?: OrderFinancesResponse; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
 
   const [toastMsg, setToastMsg] = useState("");
@@ -340,6 +341,29 @@ export default function App() {
       setOrdersItemsCache(prev => ({
         ...prev,
         [orderId]: { loading: false, error: err.message || "Erro ao carregar itens." }
+      }));
+    }
+  };
+
+  const handleLoadOrderFinances = async (orderId: string) => {
+    if (ordersFinancesCache[orderId]?.finances) return;
+    setOrdersFinancesCache(prev => ({
+      ...prev,
+      [orderId]: { loading: true }
+    }));
+
+    try {
+      const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+      const response = await getOrderFinances(fixedCreds, { orderId });
+      setOrdersFinancesCache(prev => ({
+        ...prev,
+        [orderId]: { loading: false, finances: response }
+      }));
+    } catch (err: any) {
+      console.error(err);
+      setOrdersFinancesCache(prev => ({
+        ...prev,
+        [orderId]: { loading: false, error: err.message || "Erro ao carregar dados financeiros." }
       }));
     }
   };
@@ -906,7 +930,9 @@ export default function App() {
           onClose={() => setSelectedOrderForModal(null)}
           order={selectedOrderForModal}
           itemsCacheEntry={ordersItemsCache[selectedOrderForModal.AmazonOrderId]}
+          financesCacheEntry={ordersFinancesCache[selectedOrderForModal.AmazonOrderId]}
           onLoadItems={handleLoadOrderItems}
+          onLoadFinances={handleLoadOrderFinances}
           onToast={displayToast}
         />
       )}

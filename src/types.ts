@@ -91,6 +91,11 @@ export interface AmazonOrder {
   OrderType?: string;
 }
 
+export interface OrderMoney {
+  CurrencyCode: string;
+  Amount: string;
+}
+
 export interface OrderItem {
   ASIN: string;
   SellerSKU?: string;
@@ -98,14 +103,16 @@ export interface OrderItem {
   Title?: string;
   QuantityOrdered: number;
   QuantityShipped?: number;
-  ItemPrice?: {
-    CurrencyCode: string;
-    Amount: string;
-  };
-  PromotionDiscount?: {
-    CurrencyCode: string;
-    Amount: string;
-  };
+  ItemPrice?: OrderMoney;
+  ShippingPrice?: OrderMoney;
+  ItemTax?: OrderMoney;
+  ShippingTax?: OrderMoney;
+  ShippingDiscount?: OrderMoney;
+  ShippingDiscountTax?: OrderMoney;
+  PromotionDiscount?: OrderMoney;
+  PromotionDiscountTax?: OrderMoney;
+  CODFee?: OrderMoney;
+  CODFeeDiscount?: OrderMoney;
 }
 
 export interface OrdersResponse {
@@ -119,5 +126,71 @@ export interface OrderItemsResponse {
   OrderItems: OrderItem[];
   NextToken?: string;
   AmazonOrderId: string;
+}
+
+// Finances API (listFinancialEventsByOrderId)
+export interface FinancesMoney {
+  CurrencyCode?: string;
+  CurrencyAmount?: number;
+}
+
+export interface ChargeComponent {
+  ChargeType?: string;
+  ChargeAmount?: FinancesMoney;
+}
+
+export interface FeeComponent {
+  FeeType?: string;
+  FeeAmount?: FinancesMoney;
+}
+
+export interface FinancesPromotion {
+  PromotionType?: string;
+  PromotionId?: string;
+  PromotionAmount?: FinancesMoney;
+}
+
+export interface ShipmentItem {
+  SellerSKU?: string;
+  OrderItemId?: string;
+  QuantityShipped?: number;
+  ItemChargeList?: ChargeComponent[];
+  ItemChargeAdjustmentList?: ChargeComponent[];
+  ItemFeeList?: FeeComponent[];
+  ItemFeeAdjustmentList?: FeeComponent[];
+  ItemTaxWithheldList?: {
+    TaxCollectionModel?: string;
+    TaxesWithheld?: ChargeComponent[];
+  }[];
+  PromotionList?: FinancesPromotion[];
+  PromotionAdjustmentList?: FinancesPromotion[];
+  CostOfPointsGranted?: FinancesMoney;
+  CostOfPointsReturned?: FinancesMoney;
+}
+
+export interface ShipmentEvent {
+  AmazonOrderId?: string;
+  SellerOrderId?: string;
+  MarketplaceName?: string;
+  PostedDate?: string;
+  ShipmentItemList?: ShipmentItem[];
+  ShipmentItemAdjustmentList?: ShipmentItem[];
+  ShipmentFeeList?: FeeComponent[];
+  OrderFeeList?: FeeComponent[];
+}
+
+export interface FinancialEvents {
+  ShipmentEventList?: ShipmentEvent[];
+  RefundEventList?: ShipmentEvent[];
+  GuaranteeClaimEventList?: ShipmentEvent[];
+  ChargebackEventList?: ShipmentEvent[];
+  ServiceFeeEventList?: any[];
+  AdjustmentEventList?: any[];
+  [key: string]: any;
+}
+
+export interface OrderFinancesResponse {
+  FinancialEvents?: FinancialEvents;
+  NextToken?: string;
 }
 

@@ -72,6 +72,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else if (op === "getOrderItems") {
       const encodedOrderId = encodeURIComponent(params?.orderId || "");
       url = `${BASE_URL_NA}/orders/v0/orders/${encodedOrderId}/orderItems`;
+    } else if (op === "getOrderFinances") {
+      const encodedOrderId = encodeURIComponent(params?.orderId || "");
+      url = `${BASE_URL_NA}/finances/v0/orders/${encodedOrderId}/financialEvents`;
     } else {
       return res.status(400).json({ error: `Operation not supported: ${op}` });
     }
