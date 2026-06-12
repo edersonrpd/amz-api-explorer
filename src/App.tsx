@@ -1,7 +1,7 @@
 import { useState, FormEvent, useEffect } from "react";
-import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances } from "./services/amazonService";
+import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances, getFeesEstimateForSku } from "./services/amazonService";
 import { useLocalStorage } from "./hooks/useLocalStorage";
-import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem, OrderFinancesResponse } from "./types";
+import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem, OrderFinancesResponse, OrderItemFeeEstimate } from "./types";
 import { MARKETPLACES } from "./constants";
 import { ListingResult } from "./components/ListingResult";
 import { JsonDrawer } from "./components/JsonDrawer";
@@ -49,6 +49,7 @@ export default function App() {
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
   const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
   const [ordersFinancesCache, setOrdersFinancesCache] = useState<Record<string, { loading: boolean; finances?: OrderFinancesResponse; error?: string }>>({});
+  const [ordersFeesEstimateCache, setOrdersFeesEstimateCache] = useState<Record<string, { loading: boolean; estimates?: OrderItemFeeEstimate[]; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
 
   const [toastMsg, setToastMsg] = useState("");
@@ -364,6 +365,70 @@ export default function App() {
       setOrdersFinancesCache(prev => ({
         ...prev,
         [orderId]: { loading: false, error: err.message || "Erro ao carregar dados financeiros." }
+      }));
+    }
+  };
+
+  const handleLoadOrderFeesEstimates = async (orderId: string, items: OrderItem[], isAmazonFulfilled: boolean) => {
+    if (ordersFeesEstimateCache[orderId]) return;
+    setOrdersFeesEstimateCache(prev => ({
+      ...prev,
+      [orderId]: { loading: true }
+    }));
+
+    const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+    const estimates: OrderItemFeeEstimate[] = [];
+
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const sku = it.SellerSKU || "";
+        const qty = it.QuantityOrdered || 1;
+        const lineTotal = parseFloat(it.ItemPrice?.Amount || "0");
+        const unitPrice = qty > 0 ? lineTotal / qty : lineTotal;
+
+        const entry: OrderItemFeeEstimate = {
+          sku,
+          orderItemId: it.OrderItemId,
+          quantity: qty,
+          unitPrice,
+          lineTotal
+        };
+
+        if (!sku || !(unitPrice > 0)) {
+          entry.error = !sku ? "Item sem SKU." : "Item sem preço (a estimativa exige o preço de venda).";
+          estimates.push(entry);
+          continue;
+        }
+
+        // Rate limit da Product Fees API: ~1 req/s
+        if (i > 0) {
+          await new Promise(r => setTimeout(r, 1100));
+        }
+
+        try {
+          entry.result = await getFeesEstimateForSku(fixedCreds, {
+            sku,
+            price: Math.round(unitPrice * 100) / 100,
+            currencyCode: it.ItemPrice?.CurrencyCode || "BRL",
+            isAmazonFulfilled
+          });
+        } catch (err: any) {
+          console.error(err);
+          entry.error = err.message || "Erro ao estimar taxas.";
+        }
+        estimates.push(entry);
+      }
+
+      setOrdersFeesEstimateCache(prev => ({
+        ...prev,
+        [orderId]: { loading: false, estimates }
+      }));
+    } catch (err: any) {
+      console.error(err);
+      setOrdersFeesEstimateCache(prev => ({
+        ...prev,
+        [orderId]: { loading: false, error: err.message || "Erro ao estimar taxas." }
       }));
     }
   };
@@ -931,8 +996,10 @@ export default function App() {
           order={selectedOrderForModal}
           itemsCacheEntry={ordersItemsCache[selectedOrderForModal.AmazonOrderId]}
           financesCacheEntry={ordersFinancesCache[selectedOrderForModal.AmazonOrderId]}
+          feesEstimateCacheEntry={ordersFeesEstimateCache[selectedOrderForModal.AmazonOrderId]}
           onLoadItems={handleLoadOrderItems}
           onLoadFinances={handleLoadOrderFinances}
+          onLoadFeesEstimates={handleLoadOrderFeesEstimates}
           onToast={displayToast}
         />
       )}

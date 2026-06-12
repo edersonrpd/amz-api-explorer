@@ -1,4 +1,4 @@
-import { AmazonCredentials, ListingParams, AmazonListing, AmazonSearchItemsResponse, OrdersResponse, OrderItemsResponse, OrderFinancesResponse } from "../types";
+import { AmazonCredentials, ListingParams, AmazonListing, AmazonSearchItemsResponse, OrdersResponse, OrderItemsResponse, OrderFinancesResponse, FeesEstimateResult } from "../types";
 
 const BASE_URL_NA = "https://sellingpartnerapi-na.amazon.com";
 
@@ -284,4 +284,56 @@ export const getOrderFinances = async (
     return data.payload as OrderFinancesResponse;
   }
   return data as OrderFinancesResponse;
+};
+
+export const getFeesEstimateForSku = async (
+  credentials: AmazonCredentials,
+  params: { sku: string; price: number; currencyCode?: string; isAmazonFulfilled?: boolean }
+): Promise<FeesEstimateResult> => {
+  const jsonStr = encodeURIComponent(JSON.stringify({ credentials, params, operation: "getFeesEstimateForSku" }));
+  let payload = "";
+  for (let i = 0; i < jsonStr.length; i++) {
+    payload += jsonStr.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+
+  const response = await fetch("/amazon-proxy", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ payload }),
+  });
+
+  const contentType = response.headers.get("content-type");
+  if (!contentType || !contentType.includes("application/json")) {
+    const text = await response.text();
+    console.error("Non-JSON response from server:", text);
+    throw new Error(`O servidor retornou uma resposta inesperada. Detalhes: ${text.substring(0, 150)}`);
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const errorDetails = data.text
+      ? `Resposta retornou texto/HTML: ${data.text.substring(0, 150)}...`
+      : (data.message || JSON.stringify(data.errors || data));
+
+    if (response.status === 403) {
+      throw new Error(`403 Forbidden: O Access Token pode estar expirado/inválido ou a aplicação SP-API não possui o role "Pricing". Detalhes: ${errorDetails}`);
+    }
+    if (response.status === 400) {
+       throw new Error(`400 Bad Request: Parâmetros inválidos. Detalhes: ${errorDetails}`);
+    }
+    if (response.status === 429) {
+       throw new Error(`Too Many Requests (Erro 429): Limite de requisições atingido na Product Fees API da Amazon. Aguarde um momento.`);
+    }
+    throw new Error(`Erro ${response.status}: ${errorDetails}`);
+  }
+
+  if (data.errors && data.errors.length > 0) {
+      throw new Error(`Erro da API: ${data.errors[0].message}`);
+  }
+
+  const result = data.payload?.FeesEstimateResult || data.FeesEstimateResult || data.payload || data;
+  return result as FeesEstimateResult;
 };

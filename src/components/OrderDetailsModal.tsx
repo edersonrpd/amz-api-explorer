@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { AmazonOrder, OrderItem, OrderFinancesResponse, ShipmentEvent, ServiceFeeEvent, OrderMoney } from "../types";
+import { AmazonOrder, OrderItem, OrderFinancesResponse, ShipmentEvent, ServiceFeeEvent, OrderMoney, OrderItemFeeEstimate } from "../types";
 
 interface OrderDetailsModalProps {
   isOpen: boolean;
@@ -7,8 +7,10 @@ interface OrderDetailsModalProps {
   order: AmazonOrder & Record<string, any>; // Support dynamic extra fields from JSON
   itemsCacheEntry?: { loading: boolean; items?: OrderItem[]; error?: string };
   financesCacheEntry?: { loading: boolean; finances?: OrderFinancesResponse; error?: string };
+  feesEstimateCacheEntry?: { loading: boolean; estimates?: OrderItemFeeEstimate[]; error?: string };
   onLoadItems: (orderId: string) => void;
   onLoadFinances: (orderId: string) => void;
+  onLoadFeesEstimates: (orderId: string, items: OrderItem[], isAmazonFulfilled: boolean) => void;
   onToast: (msg: string) => void;
 }
 
@@ -107,6 +109,8 @@ const FEE_TYPE_PT: Record<string, string> = {
   PerItemFee: 'Tarifa por item (plano individual)',
   TechnologyFee: 'Taxa de tecnologia',
   HighVolumeListingFee: 'Taxa de listagem de alto volume',
+  ReferralFee: 'Comissão da Amazon (referral fee)',
+  FulfillmentFees: 'Tarifas de logística (FBA)',
   MFNPostageFee: 'Etiqueta de envio MFN (Comprar Envio)',
   MFNShippingChargeback: 'Estorno de frete MFN',
   Subscription: 'Mensalidade do plano profissional',
@@ -278,8 +282,10 @@ export function OrderDetailsModal({
   order,
   itemsCacheEntry,
   financesCacheEntry,
+  feesEstimateCacheEntry,
   onLoadItems,
   onLoadFinances,
+  onLoadFeesEstimates,
   onToast
 }: OrderDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<"detail" | "json">("detail");
@@ -296,6 +302,17 @@ export function OrderDetailsModal({
       }
     }
   }, [isOpen, order.AmazonOrderId]);
+
+  // Quando a venda ainda não foi lançada na Finances API, estima a comissão
+  // via Product Fees API usando o preço real de cada item do pedido
+  useEffect(() => {
+    if (!isOpen || feesEstimateCacheEntry) return;
+    const items = itemsCacheEntry?.items;
+    const fe = financesCacheEntry?.finances?.FinancialEvents;
+    if (!items || items.length === 0 || !fe) return;
+    if ((fe.ShipmentEventList || []).length > 0) return;
+    onLoadFeesEstimates(order.AmazonOrderId, items, order.FulfillmentChannel === "AFN");
+  }, [isOpen, itemsCacheEntry, financesCacheEntry, feesEstimateCacheEntry, order.AmazonOrderId]);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -550,17 +567,138 @@ export function OrderDetailsModal({
                       ...buildServiceFeeRows(fe.ServiceFeeEventList || [], FIN_EVENT_GROUP_PT.ServiceFeeEventList)
                     ];
                     const saleNotPostedYet = (fe.ShipmentEventList || []).length === 0;
+                    const netTotalPosted = finRows.reduce((acc, r) => acc + r.amount, 0);
+
+                    // Seção de taxas estimadas (Product Fees API), exibida enquanto a venda não foi lançada
+                    const estimatesJsx = !saleNotPostedYet ? null : (() => {
+                      if (feesEstimateCacheEntry?.loading) {
+                        return (
+                          <div className="p-6 text-center text-xs text-muted font-semibold flex items-center justify-center gap-2 border-t border-border">
+                            <span className="w-5 h-5 border-2 border-accent border-t-transparent animate-spin rounded-full"></span>
+                            Estimando comissão e taxas via Product Fees API...
+                          </div>
+                        );
+                      }
+                      if (feesEstimateCacheEntry?.error) {
+                        return (
+                          <div className="p-5 text-xs font-mono text-red-600 bg-red-50 border-t border-red-200">
+                            <strong>Erro ao estimar taxas:</strong> {feesEstimateCacheEntry.error}
+                          </div>
+                        );
+                      }
+                      const estimates = feesEstimateCacheEntry?.estimates;
+                      if (!estimates || estimates.length === 0) return null;
+
+                      let totalItems = 0;
+                      let totalEstimatedFees = 0;
+                      const estRows: { sku: string; typeCode: string; typeLabel: string; unit: number; qty: number; total: number }[] = [];
+                      const estErrors: { sku: string; msg: string }[] = [];
+
+                      for (const est of estimates) {
+                        totalItems += est.lineTotal;
+                        if (est.error) {
+                          estErrors.push({ sku: est.sku || '—', msg: est.error });
+                          continue;
+                        }
+                        if (est.result?.Status && est.result.Status !== 'Success') {
+                          estErrors.push({ sku: est.sku || '—', msg: est.result?.Error?.Message || `Status: ${est.result.Status}` });
+                          continue;
+                        }
+                        for (const fd of est.result?.FeesEstimate?.FeeDetailList || []) {
+                          const unitFee = fd.FinalFee?.Amount ?? fd.FeeAmount?.Amount ?? 0;
+                          if (unitFee === 0) continue;
+                          estRows.push({
+                            sku: est.sku,
+                            typeCode: fd.FeeType || '—',
+                            typeLabel: finLabel(FEE_TYPE_PT, fd.FeeType),
+                            unit: unitFee,
+                            qty: est.quantity,
+                            total: unitFee * est.quantity
+                          });
+                        }
+                        totalEstimatedFees += (est.result?.FeesEstimate?.TotalFeesEstimate?.Amount ?? 0) * est.quantity;
+                      }
+
+                      const projectedNet = totalItems - totalEstimatedFees + netTotalPosted;
+
+                      return (
+                        <div className="border-t border-border">
+                          <div className="px-4 pt-3 pb-1 text-[12px] font-bold text-ink flex items-center gap-2">
+                            Taxas estimadas (Product Fees API)
+                            <span className="badge blue">PRÉVIA</span>
+                          </div>
+                          <div className="px-4 pb-2 text-[11px] text-muted">
+                            Estimativa calculada com o preço de venda real de cada item do pedido.
+                            O valor definitivo será lançado na Finances API após a cobrança/envio.
+                          </div>
+                          {estRows.length > 0 && (
+                            <table className="items-tbl">
+                              <thead>
+                                <tr>
+                                  <th>SKU</th>
+                                  <th>Taxa</th>
+                                  <th>Código (SP-API)</th>
+                                  <th style={{ textAlign: 'right' }}>Por unidade</th>
+                                  <th style={{ textAlign: 'right' }}>Qtd.</th>
+                                  <th style={{ textAlign: 'right' }}>Total estimado</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {estRows.map((r, idx) => (
+                                  <tr key={idx}>
+                                    <td className="mono">{r.sku}</td>
+                                    <td>{r.typeLabel}</td>
+                                    <td className="mono">{r.typeCode}</td>
+                                    <td className="num">{fmtMoney(r.unit)}</td>
+                                    <td className="num">{r.qty}</td>
+                                    <td className="num" style={{ color: '#c62828', fontWeight: 600 }}>- {fmtMoney(r.total)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr style={{ background: 'var(--surface-2)' }}>
+                                  <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Total dos itens do pedido</td>
+                                  <td className="num" style={{ fontWeight: 700 }}>{fmtMoney(totalItems)}</td>
+                                </tr>
+                                <tr style={{ background: 'var(--surface-2)' }}>
+                                  <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Total de taxas estimadas</td>
+                                  <td className="num" style={{ fontWeight: 700, color: '#c62828' }}>- {fmtMoney(totalEstimatedFees)}</td>
+                                </tr>
+                                {netTotalPosted !== 0 && (
+                                  <tr style={{ background: 'var(--surface-2)' }}>
+                                    <td colSpan={5} style={{ textAlign: 'right', fontWeight: 700, fontSize: '12px' }}>Eventos já lançados (ex: etiqueta de envio)</td>
+                                    <td className="num" style={{ fontWeight: 700, color: netTotalPosted < 0 ? '#c62828' : '#0f7a4f' }}>{fmtMoney(netTotalPosted)}</td>
+                                  </tr>
+                                )}
+                                <tr style={{ background: 'var(--green-soft)' }}>
+                                  <td colSpan={5} style={{ textAlign: 'right', fontWeight: 800, fontSize: '12.5px' }}>Líquido projetado (estimativa)</td>
+                                  <td className="num" style={{ fontWeight: 800, color: projectedNet < 0 ? '#c62828' : '#0f7a4f', fontSize: '14px' }}>{fmtMoney(projectedNet)}</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          )}
+                          {estErrors.map((e, idx) => (
+                            <div key={idx} className="px-4 py-2 text-[11px] font-mono text-red-600 bg-red-50 border-t border-red-200">
+                              <strong>{e.sku}:</strong> {e.msg}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })();
 
                     if (finRows.length === 0) {
                       return (
-                        <div className="p-6 text-center text-xs text-muted font-semibold">
-                          Nenhum evento financeiro disponível para este pedido ainda.
-                          <br />
-                          <span className="font-normal">
-                            As taxas só são registradas pela Amazon após a cobrança/envio do pedido
-                            (pedidos Pendentes/Não Enviados ainda não possuem eventos financeiros).
-                          </span>
-                        </div>
+                        <>
+                          <div className="p-6 text-center text-xs text-muted font-semibold">
+                            Nenhum evento financeiro disponível para este pedido ainda.
+                            <br />
+                            <span className="font-normal">
+                              As taxas só são registradas pela Amazon após a cobrança/envio do pedido
+                              (pedidos Pendentes/Não Enviados ainda não possuem eventos financeiros).
+                            </span>
+                          </div>
+                          {estimatesJsx}
+                        </>
                       );
                     }
 
@@ -570,7 +708,7 @@ export function OrderDetailsModal({
                     const totalFees = sumBy('Taxa Amazon');
                     const totalPromos = sumBy('Promoção');
                     const totalWithheld = sumBy('Imposto retido');
-                    const netTotal = finRows.reduce((acc, r) => acc + r.amount, 0);
+                    const netTotal = netTotalPosted;
 
                     const postedDates = Array.from(new Set(
                       [...(fe.ShipmentEventList || []), ...(fe.RefundEventList || [])]
@@ -656,6 +794,7 @@ export function OrderDetailsModal({
                             Lançamento(s) registrado(s) em: {postedDates.map(d => fmtDT(d)).join(' · ')}
                           </div>
                         )}
+                        {estimatesJsx}
                       </>
                     );
                   })()}
@@ -842,6 +981,34 @@ export function OrderDetailsModal({
                   </div>
                   <div className="json-scroll">
                     <pre dangerouslySetInnerHTML={{ __html: highlight(financesCacheEntry.finances) }} />
+                  </div>
+                </div>
+              )}
+              {feesEstimateCacheEntry?.estimates && (
+                <div className="json-pane" style={{ marginTop: '14px' }}>
+                  <div className="json-bar">
+                    <span className="t">getMyFeesEstimateForSKU (por item) · {order.AmazonOrderId}</span>
+                    <div className="right">
+                      <button
+                        className="m-copy-btn"
+                        onClick={() => {
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(JSON.stringify(feesEstimateCacheEntry.estimates, null, 2));
+                            onToast("JSON de estimativas copiado!");
+                          }
+                        }}
+                        title="Copiar JSON de estimativas"
+                        style={{ borderColor: 'rgba(255,255,255,.16)' }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect width="13" height="13" x="9" y="9" rx="2" />
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="json-scroll">
+                    <pre dangerouslySetInnerHTML={{ __html: highlight(feesEstimateCacheEntry.estimates) }} />
                   </div>
                 </div>
               )}

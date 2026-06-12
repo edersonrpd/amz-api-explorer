@@ -30,6 +30,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     let url = "";
+    let method = "GET";
+    let requestBody: string | undefined;
     if (op === "getListingsItem") {
       const encodedSku = encodeURIComponent(params?.sku || "");
       const queryParams = new URLSearchParams({
@@ -75,6 +77,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else if (op === "getOrderFinances") {
       const encodedOrderId = encodeURIComponent(params?.orderId || "");
       url = `${BASE_URL_NA}/finances/v0/orders/${encodedOrderId}/financialEvents`;
+    } else if (op === "getFeesEstimateForSku") {
+      const encodedSku = encodeURIComponent(params?.sku || "");
+      url = `${BASE_URL_NA}/products/fees/v0/listings/${encodedSku}/feesEstimate`;
+      method = "POST";
+      requestBody = JSON.stringify({
+        FeesEstimateRequest: {
+          MarketplaceId: marketplaceId,
+          IsAmazonFulfilled: !!params?.isAmazonFulfilled,
+          PriceToEstimateFees: {
+            ListingPrice: {
+              CurrencyCode: params?.currencyCode || "BRL",
+              Amount: params?.price
+            }
+          },
+          Identifier: `fees-${Date.now()}`
+        }
+      });
     } else {
       return res.status(400).json({ error: `Operation not supported: ${op}` });
     }
@@ -83,10 +102,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     fetchHeaders.set("x-amz-access-token", accessToken);
     fetchHeaders.set("accept", "application/json");
     fetchHeaders.set("user-agent", "Amazon-Listings-Explorer/1.0 (Language=Node.js, Environment=Vercel)");
+    if (requestBody) {
+      fetchHeaders.set("content-type", "application/json");
+    }
 
     const fetchOptions: RequestInit = {
-      method: "GET",
+      method,
       headers: fetchHeaders,
+      body: requestBody,
     };
 
     console.log(`[AMAZON VERCEL] Fetching: ${url}`);

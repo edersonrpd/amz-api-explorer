@@ -203,3 +203,45 @@ export interface OrderFinancesResponse {
   NextToken?: string;
 }
 
+// Product Fees API (getMyFeesEstimateForSKU)
+export interface FeesMoney {
+  CurrencyCode?: string;
+  Amount?: number;
+}
+
+export interface FeeDetail {
+  FeeType?: string;
+  FeeAmount?: FeesMoney;
+  FeePromotion?: FeesMoney;
+  TaxAmount?: FeesMoney;
+  FinalFee?: FeesMoney;
+  IncludedFeeDetailList?: FeeDetail[];
+}
+
+export interface FeesEstimate {
+  TimeOfFeesEstimation?: string;
+  TotalFeesEstimate?: FeesMoney;
+  FeeDetailList?: FeeDetail[];
+}
+
+export interface FeesEstimateResult {
+  Status?: string;
+  FeesEstimate?: FeesEstimate;
+  Error?: {
+    Type?: string;
+    Code?: string;
+    Message?: string;
+  };
+}
+
+// Estimativa de taxas calculada para um item do pedido (preço unitário × quantidade)
+export interface OrderItemFeeEstimate {
+  sku: string;
+  orderItemId: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  result?: FeesEstimateResult;
+  error?: string;
+}
+
