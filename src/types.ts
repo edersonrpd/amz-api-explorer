@@ -179,12 +179,21 @@ export interface ShipmentEvent {
   OrderFeeList?: FeeComponent[];
 }
 
+export interface ServiceFeeEvent {
+  AmazonOrderId?: string;
+  FeeReason?: string;
+  FeeDescription?: string;
+  SellerSKU?: string;
+  ASIN?: string;
+  FeeList?: FeeComponent[];
+}
+
 export interface FinancialEvents {
   ShipmentEventList?: ShipmentEvent[];
   RefundEventList?: ShipmentEvent[];
   GuaranteeClaimEventList?: ShipmentEvent[];
   ChargebackEventList?: ShipmentEvent[];
-  ServiceFeeEventList?: any[];
+  ServiceFeeEventList?: ServiceFeeEvent[];
   AdjustmentEventList?: any[];
   [key: string]: any;
 }

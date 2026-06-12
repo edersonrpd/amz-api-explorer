@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { AmazonOrder, OrderItem, OrderFinancesResponse, ShipmentEvent, OrderMoney } from "../types";
+import { AmazonOrder, OrderItem, OrderFinancesResponse, ShipmentEvent, ServiceFeeEvent, OrderMoney } from "../types";
 
 interface OrderDetailsModalProps {
   isOpen: boolean;
@@ -106,14 +106,20 @@ const FEE_TYPE_PT: Record<string, string> = {
   DigitalServicesFee: 'Taxa de serviços digitais',
   PerItemFee: 'Tarifa por item (plano individual)',
   TechnologyFee: 'Taxa de tecnologia',
-  HighVolumeListingFee: 'Taxa de listagem de alto volume'
+  HighVolumeListingFee: 'Taxa de listagem de alto volume',
+  MFNPostageFee: 'Etiqueta de envio MFN (Comprar Envio)',
+  MFNShippingChargeback: 'Estorno de frete MFN',
+  Subscription: 'Mensalidade do plano profissional',
+  StorageFee: 'Tarifa de armazenagem',
+  StorageRenewalBilling: 'Renovação de armazenagem'
 };
 
 const FIN_EVENT_GROUP_PT: Record<string, string> = {
   ShipmentEventList: 'Envio (Shipment)',
   RefundEventList: 'Reembolso (Refund)',
   GuaranteeClaimEventList: 'Garantia A-a-Z (Claim)',
-  ChargebackEventList: 'Chargeback'
+  ChargebackEventList: 'Chargeback',
+  ServiceFeeEventList: 'Taxa de serviço (Service Fee)'
 };
 
 const finLabel = (dict: Record<string, string>, code?: string) => {
@@ -193,6 +199,24 @@ function buildFinRows(events: ShipmentEvent[], groupLabel: string): FinRow[] {
         sku: '— (nível do pedido)',
         typeCode: f.FeeType || '—',
         typeLabel: finLabel(FEE_TYPE_PT, f.FeeType),
+        amount: f.FeeAmount?.CurrencyAmount ?? 0
+      });
+    }
+  }
+  return rows;
+}
+
+// Flatten ServiceFeeEventList (ex: etiqueta de envio MFN comprada via Amazon) into table rows
+function buildServiceFeeRows(events: ServiceFeeEvent[], groupLabel: string): FinRow[] {
+  const rows: FinRow[] = [];
+  for (const ev of events) {
+    for (const f of ev.FeeList || []) {
+      rows.push({
+        group: groupLabel,
+        category: 'Taxa Amazon',
+        sku: ev.SellerSKU || '— (nível do pedido)',
+        typeCode: f.FeeType || ev.FeeReason || '—',
+        typeLabel: finLabel(FEE_TYPE_PT, f.FeeType || ev.FeeReason),
         amount: f.FeeAmount?.CurrencyAmount ?? 0
       });
     }
@@ -522,8 +546,10 @@ export function OrderDetailsModal({
                       ...buildFinRows(fe.ShipmentEventList || [], FIN_EVENT_GROUP_PT.ShipmentEventList),
                       ...buildFinRows(fe.RefundEventList || [], FIN_EVENT_GROUP_PT.RefundEventList),
                       ...buildFinRows(fe.GuaranteeClaimEventList || [], FIN_EVENT_GROUP_PT.GuaranteeClaimEventList),
-                      ...buildFinRows(fe.ChargebackEventList || [], FIN_EVENT_GROUP_PT.ChargebackEventList)
+                      ...buildFinRows(fe.ChargebackEventList || [], FIN_EVENT_GROUP_PT.ChargebackEventList),
+                      ...buildServiceFeeRows(fe.ServiceFeeEventList || [], FIN_EVENT_GROUP_PT.ServiceFeeEventList)
                     ];
+                    const saleNotPostedYet = (fe.ShipmentEventList || []).length === 0;
 
                     if (finRows.length === 0) {
                       return (
@@ -612,11 +638,19 @@ export function OrderDetailsModal({
                               </tr>
                             )}
                             <tr style={{ background: 'var(--green-soft)' }}>
-                              <td colSpan={5} style={{ textAlign: 'right', fontWeight: 800, fontSize: '12.5px' }}>Valor líquido do vendedor (estimado)</td>
-                              <td className="num" style={{ fontWeight: 800, color: '#0f7a4f', fontSize: '14px' }}>{fmtMoney(netTotal)}</td>
+                              <td colSpan={5} style={{ textAlign: 'right', fontWeight: 800, fontSize: '12.5px' }}>
+                                {saleNotPostedYet ? 'Saldo dos eventos lançados até agora' : 'Valor líquido do vendedor (estimado)'}
+                              </td>
+                              <td className="num" style={{ fontWeight: 800, color: netTotal < 0 ? '#c62828' : '#0f7a4f', fontSize: '14px' }}>{fmtMoney(netTotal)}</td>
                             </tr>
                           </tfoot>
                         </table>
+                        {saleNotPostedYet && (
+                          <div className="px-4 py-2 text-[11px] text-muted border-t border-border">
+                            A receita da venda (preço do produto, comissão, etc.) ainda não foi lançada pela Amazon —
+                            isso ocorre somente após a cobrança/envio do pedido. Os valores acima são apenas os eventos já registrados (ex: etiqueta de envio).
+                          </div>
+                        )}
                         {postedDates.length > 0 && (
                           <div className="px-4 py-2 text-[11px] text-muted border-t border-border">
                             Lançamento(s) registrado(s) em: {postedDates.map(d => fmtDT(d)).join(' · ')}
