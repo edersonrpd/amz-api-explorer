@@ -337,3 +337,113 @@ export const getFeesEstimateForSku = async (
   const result = data.payload?.FeesEstimateResult || data.FeesEstimateResult || data.payload || data;
   return result as FeesEstimateResult;
 };
+
+// ---------------------------------------------------------------------------
+// Reports API (extração de TODOS os anúncios da conta)
+// ---------------------------------------------------------------------------
+
+// Codifica o payload em hex para evitar que o WAF inspecione o token da Amazon.
+const encodeProxyPayload = (obj: any): string => {
+  const jsonStr = encodeURIComponent(JSON.stringify(obj));
+  let payload = "";
+  for (let i = 0; i < jsonStr.length; i++) {
+    payload += jsonStr.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+  return payload;
+};
+
+const callProxy = async (obj: any): Promise<any> => {
+  const payload = encodeProxyPayload(obj);
+
+  const response = await fetch("/amazon-proxy", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ payload }),
+  });
+
+  const contentType = response.headers.get("content-type");
+  if (!contentType || !contentType.includes("application/json")) {
+    const text = await response.text();
+    console.error("Non-JSON response from server:", text);
+    throw new Error(`O servidor retornou uma resposta inesperada. Detalhes: ${text.substring(0, 150)}`);
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const errorDetails = data.text
+      ? `Resposta retornou texto/HTML: ${data.text.substring(0, 150)}...`
+      : (data.message || JSON.stringify(data.errors || data));
+
+    if (response.status === 403) {
+      throw new Error(`403 Forbidden: O Access Token pode estar expirado/inválido ou a aplicação SP-API não possui o role "Inventory and Order Tracking" necessário para a Reports API. Detalhes: ${errorDetails}`);
+    }
+    if (response.status === 400) {
+      throw new Error(`400 Bad Request: Parâmetros inválidos. Detalhes: ${errorDetails}`);
+    }
+    if (response.status === 429) {
+      throw new Error(`Too Many Requests (Erro 429): Limite de requisições atingido na Reports API. Aguarde um momento antes de tentar novamente.`);
+    }
+    throw new Error(`Erro ${response.status}: ${errorDetails}`);
+  }
+
+  if (data.errors && data.errors.length > 0) {
+    const isRateLimit = data.errors.some((e: any) => e.code === "QuotaExceeded" || e.message?.includes("429") || e.message?.includes("Too Many Requests"));
+    if (isRateLimit) {
+      throw new Error(`Too Many Requests (Erro 429): Limite de requisições atingido. Aguarde um momento antes de tentar novamente.`);
+    }
+    throw new Error(`Erro da API: ${data.errors[0].message}`);
+  }
+
+  return data;
+};
+
+export interface CreateReportResponse {
+  reportId: string;
+}
+
+export interface GetReportResponse {
+  reportId: string;
+  reportType: string;
+  processingStatus: "IN_QUEUE" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "FATAL";
+  reportDocumentId?: string;
+  createdTime?: string;
+  processingStartTime?: string;
+  processingEndTime?: string;
+}
+
+export interface GetReportDocumentResponse {
+  reportDocumentId: string;
+  url: string;
+  compressionAlgorithm?: "GZIP";
+}
+
+// 1. Solicita a geração do relatório.
+export const createReport = (
+  credentials: AmazonCredentials,
+  params: { reportType: string }
+): Promise<CreateReportResponse> =>
+  callProxy({ credentials, params, operation: "createReport" });
+
+// 2. Consulta o status de processamento do relatório.
+export const getReport = (
+  credentials: AmazonCredentials,
+  params: { reportId: string }
+): Promise<GetReportResponse> =>
+  callProxy({ credentials, params, operation: "getReport" });
+
+// 3. Obtém a URL pré-assinada para download do documento gerado.
+export const getReportDocument = (
+  credentials: AmazonCredentials,
+  params: { reportDocumentId: string }
+): Promise<GetReportDocumentResponse> =>
+  callProxy({ credentials, params, operation: "getReportDocument" });
+
+// 4. Faz o download (e descompressão) do conteúdo do relatório via proxy.
+export const downloadReportDocument = (
+  credentials: AmazonCredentials,
+  params: { url: string; compressionAlgorithm?: string }
+): Promise<{ content: string }> =>
+  callProxy({ credentials, params, operation: "downloadReportDocument" });

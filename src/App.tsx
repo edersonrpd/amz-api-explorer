@@ -1,12 +1,12 @@
 import { useState, FormEvent, useEffect } from "react";
-import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances, getFeesEstimateForSku } from "./services/amazonService";
+import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances, getFeesEstimateForSku, createReport, getReport, getReportDocument, downloadReportDocument } from "./services/amazonService";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem, OrderFinancesResponse, OrderItemFeeEstimate } from "./types";
 import { MARKETPLACES } from "./constants";
 import { ListingResult } from "./components/ListingResult";
 import { JsonDrawer } from "./components/JsonDrawer";
 import { OrderDetailsModal } from "./components/OrderDetailsModal";
-import { exportListingToExcel, exportAllListingsToExcel } from "./lib/export";
+import { exportListingToExcel, exportAllListingsToExcel, exportReportListingsToExcel } from "./lib/export";
 
 const ORDER_STATUS_OPTIONS = [
   { id: "Pending", label: "Pendente" },
@@ -52,10 +52,17 @@ export default function App() {
   const [ordersFeesEstimateCache, setOrdersFeesEstimateCache] = useState<Record<string, { loading: boolean; estimates?: OrderItemFeeEstimate[]; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
 
+  // Reports / Extração de todos os anúncios
+  const [reportType, setReportType] = useState<string>("GET_MERCHANT_LISTINGS_ALL_DATA");
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportProgress, setReportProgress] = useState<string | null>(null);
+  const [reportRows, setReportRows] = useState<Record<string, string>[]>([]);
+
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
 
-  const TABS = ["Listings / Itens", "Pedidos"];
+  const TABS = ["Listings / Itens", "Pedidos", "Todos os Anúncios"];
 
   const parseSkus = (input: string): string[] => {
     if (!input) return [];
@@ -444,6 +451,83 @@ export default function App() {
     }
   };
 
+  const parseTsv = (text: string): Record<string, string>[] => {
+    const lines = text.split(/\r\n|\n|\r/).filter(l => l.length > 0);
+    if (lines.length === 0) return [];
+    const headers = lines[0].split("\t").map(h => h.trim());
+    const rows: Record<string, string>[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = lines[i].split("\t");
+      const row: Record<string, string> = {};
+      headers.forEach((h, idx) => {
+        row[h] = (cells[idx] ?? "").trim();
+      });
+      rows.push(row);
+    }
+    return rows;
+  };
+
+  const handleExtractAllListings = async () => {
+    setReportLoading(true);
+    setReportError(null);
+    setReportRows([]);
+    setReportProgress("Solicitando geração do relatório...");
+
+    const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+
+    try {
+      // 1. Cria o relatório
+      const created = await createReport(fixedCreds, { reportType });
+      const reportId = created.reportId;
+      if (!reportId) throw new Error("A Amazon não retornou um reportId.");
+
+      // 2. Faz polling até concluir (~5 min com intervalo de 5s)
+      let documentId: string | undefined;
+      const maxAttempts = 60;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise(r => setTimeout(r, 5000));
+        setReportProgress(`Aguardando a Amazon processar o relatório... (tentativa ${attempt + 1})`);
+        const status = await getReport(fixedCreds, { reportId });
+        if (status.processingStatus === "DONE") {
+          documentId = status.reportDocumentId;
+          break;
+        }
+        if (status.processingStatus === "CANCELLED") {
+          throw new Error("O relatório foi cancelado pela Amazon. Isso normalmente significa que não há dados para os parâmetros informados.");
+        }
+        if (status.processingStatus === "FATAL") {
+          throw new Error("A Amazon retornou um erro fatal ao gerar o relatório. Verifique se a aplicação SP-API possui o role necessário.");
+        }
+      }
+
+      if (!documentId) {
+        throw new Error("Tempo limite excedido aguardando o relatório ficar pronto. Tente novamente em alguns minutos.");
+      }
+
+      // 3. Obtém a URL pré-assinada do documento
+      setReportProgress("Baixando o documento do relatório...");
+      const doc = await getReportDocument(fixedCreds, { reportDocumentId: documentId });
+
+      // 4. Baixa e descomprime o conteúdo via proxy
+      const downloaded = await downloadReportDocument(fixedCreds, {
+        url: doc.url,
+        compressionAlgorithm: doc.compressionAlgorithm
+      });
+
+      // 5. Faz o parse do TSV retornado
+      setReportProgress("Processando os dados...");
+      const rows = parseTsv(downloaded.content || "");
+      setReportRows(rows);
+      displayToast(`${rows.length} anúncio(s) extraído(s)!`);
+    } catch (err: any) {
+      console.error(err);
+      setReportError(err.message || "Erro desconhecido ao extrair anúncios.");
+    } finally {
+      setReportProgress(null);
+      setReportLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (showToast) {
       const timer = setTimeout(() => setShowToast(false), 2000);
@@ -456,6 +540,13 @@ export default function App() {
   const sellerIdDisp = credentials.sellerId || "Não configurado";
 
   const selectedResult = skuResults.find(r => r.sku === selectedSku)?.data || null;
+
+  // Colunas exibidas na tabela do relatório de anúncios (a exportação inclui todas).
+  const reportHeaders = reportRows.length > 0 ? Object.keys(reportRows[0]) : [];
+  const PREFERRED_REPORT_COLS = ["seller-sku", "item-name", "asin1", "price", "quantity", "open-date", "status"];
+  const preferredReportCols = PREFERRED_REPORT_COLS.filter(c => reportHeaders.includes(c));
+  const reportDisplayCols = preferredReportCols.length > 0 ? preferredReportCols : reportHeaders.slice(0, 7);
+  const MAX_REPORT_PREVIEW = 200;
 
   return (
     <>
@@ -970,11 +1061,146 @@ export default function App() {
               </div>
             )}
           </>
+        ) : activeTab === "Todos os Anúncios" ? (
+          <>
+            {/* Connection & report controls */}
+            <section className="conn flex flex-col">
+              <div className="conn-edit">
+                <div className="conn-edit-grid">
+                  <div className="field">
+                    <label>Access Token (LWA)</label>
+                    <input
+                      className="input mono"
+                      type="password"
+                      value={credentials.accessToken}
+                      onChange={e => setCredentials({...credentials, accessToken: e.target.value})}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Seller ID</label>
+                    <input
+                      className="input mono"
+                      value={credentials.sellerId}
+                      onChange={e => setCredentials({...credentials, sellerId: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-[18px] items-end p-4 md:p-[16px_18px]">
+                <div className="field" style={{ minWidth: "260px" }}>
+                  <label>Tipo de relatório</label>
+                  <select
+                    className="input"
+                    value={reportType}
+                    onChange={e => setReportType(e.target.value)}
+                    disabled={reportLoading}
+                  >
+                    <option value="GET_MERCHANT_LISTINGS_ALL_DATA">Todos os anúncios (ativos + inativos)</option>
+                    <option value="GET_MERCHANT_LISTINGS_DATA">Apenas anúncios ativos</option>
+                    <option value="GET_MERCHANT_LISTINGS_INACTIVE_DATA">Apenas anúncios inativos</option>
+                  </select>
+                </div>
+
+                <div className="flex-1"></div>
+
+                <button
+                  type="button"
+                  onClick={handleExtractAllListings}
+                  disabled={reportLoading || !credentials.accessToken || !credentials.sellerId}
+                  className="btn btn-primary"
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                  {reportLoading ? "Extraindo..." : "Extrair todos os anúncios"}
+                </button>
+              </div>
+            </section>
+
+            {/* Error Message */}
+            {reportError && (
+              <div className="conn mt-4 !border-[#f5b76b] !bg-[#fffaf0] p-4 text-[#e8861a] font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                <strong className="text-red-700 block mb-1">Erro na extração:</strong>
+                {reportError}
+              </div>
+            )}
+
+            {/* Progress indicator */}
+            {reportProgress && (
+              <div className="conn mt-4 p-4 bg-[#fffaf0] border-[#f5b76b] text-[#e8861a] text-sm font-semibold flex items-center gap-2">
+                <div className="pulse"></div>
+                <span>{reportProgress}</span>
+              </div>
+            )}
+
+            {/* Results */}
+            {reportRows.length > 0 && (
+              <div className="card mt-6 overflow-hidden">
+                <div className="border-b border-border p-4 bg-surface-2 flex items-center justify-between flex-wrap gap-2">
+                  <h3 className="text-[13.5px] font-bold text-ink flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+                    Anúncios encontrados ({reportRows.length})
+                  </h3>
+                  <button className="btn btn-ghost" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => { displayToast('Exportando relatório completo...'); exportReportListingsToExcel(reportRows); }}>
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="m9 13 6 6"/><path d="m15 13-6 6"/></svg>
+                    Exportar tudo (XLS)
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-[13px]">
+                    <thead>
+                      <tr className="border-b border-border bg-surface text-muted text-xs font-semibold uppercase tracking-wider">
+                        {reportDisplayCols.map(col => (
+                          <th key={col} className="p-3 whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {reportRows.slice(0, MAX_REPORT_PREVIEW).map((row, idx) => (
+                        <tr key={idx} className="hover:bg-surface-2 transition-colors">
+                          {reportDisplayCols.map(col => (
+                            <td key={col} className="p-3 max-w-[280px] truncate text-ink-2 font-mono" title={row[col]}>{row[col] || "-"}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {reportRows.length > MAX_REPORT_PREVIEW && (
+                  <div className="p-3 border-t border-border bg-surface-2 text-center text-xs text-muted">
+                    Exibindo os primeiros {MAX_REPORT_PREVIEW} de {reportRows.length} anúncios. Use "Exportar tudo (XLS)" para obter a lista completa.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!reportLoading && reportRows.length === 0 && !reportError && (
+              <div className="card mt-6 p-12 text-center flex flex-col items-center justify-center">
+                <div className="ok-ico !bg-surface-2 !text-muted">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                </div>
+                <h2 className="text-[14.5px] font-bold text-ink">Extraia todos os seus anúncios</h2>
+                <p className="text-muted text-[13px] mt-1 max-w-md">Gera um relatório completo da conta via Reports API da SP-API (sem precisar digitar SKUs). O processamento pode levar de alguns segundos a poucos minutos.</p>
+              </div>
+            )}
+
+            {/* Loading state */}
+            {reportLoading && reportRows.length === 0 && (
+              <div className="card mt-6 p-12 text-center flex flex-col items-center justify-center gap-3">
+                <span className="relative flex h-6 w-6">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-6 w-6 bg-accent"></span>
+                </span>
+                <h2 className="text-[14px] font-bold text-ink">Extraindo anúncios...</h2>
+                <p className="text-xs text-muted">{reportProgress || "Comunicando com a Reports API da Amazon SP-API"}</p>
+              </div>
+            )}
+          </>
         ) : (
           <div className="card mt-6 p-10 text-center flex flex-col items-center justify-center">
              <div className="ok-ico !bg-surface-2 !text-muted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
              <h2 className="text-[14.5px] font-bold text-ink">Aba em desenvolvimento</h2>
-             <p className="text-muted text-[13px] mt-1">Utilize a aba "Listings / Itens" ou "Pedidos" por enquanto.</p>
+             <p className="text-muted text-[13px] mt-1">Utilize as abas disponíveis por enquanto.</p>
           </div>
         )}
       </div>

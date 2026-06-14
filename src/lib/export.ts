@@ -96,3 +96,11 @@ export const exportAllListingsToExcel = (results: { sku: string; status: string;
 
   XLSX.writeFile(wb, `Amazon_Listings_Batch_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
+
+// Exporta o relatório completo de anúncios (Reports API) preservando todas as colunas do TSV.
+export const exportReportListingsToExcel = (rows: Record<string, string>[]) => {
+  const wb = XLSX.utils.book_new();
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, sheet, "Anúncios");
+  XLSX.writeFile(wb, `Amazon_Todos_Anuncios_${new Date().toISOString().slice(0, 10)}.xlsx`);
+};

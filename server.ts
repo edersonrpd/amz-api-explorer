@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import zlib from "zlib";
 import { createServer as createViteServer } from "vite";
 
 async function startServer() {
@@ -33,6 +34,28 @@ async function startServer() {
       let op = operation;
       if (!op) {
         op = (params && params.skus && Array.isArray(params.skus)) ? "searchListingsItems" : "getListingsItem";
+      }
+
+      // Download do documento de relatório (URL pré-assinada S3, pode vir comprimida em GZIP).
+      // Tratado separadamente porque não usa BASE_URL_NA nem o access token.
+      if (op === "downloadReportDocument") {
+        const docUrl = params?.url;
+        if (!docUrl) {
+          return res.status(400).json({ error: "Missing report document url" });
+        }
+        const docResponse = await fetch(docUrl);
+        const arrayBuffer = await docResponse.arrayBuffer();
+        let buffer = Buffer.from(arrayBuffer);
+        if (params?.compressionAlgorithm === "GZIP") {
+          buffer = zlib.gunzipSync(buffer);
+        }
+        // Relatórios de listings podem vir em UTF-8 ou Latin-1 (Cp1252).
+        // Decodifica como UTF-8 e, se houver caractere de substituição, refaz em latin1.
+        let content = buffer.toString("utf-8");
+        if (content.includes("�")) {
+          content = buffer.toString("latin1");
+        }
+        return res.status(docResponse.status).json({ content });
       }
 
       let url = "";
@@ -94,6 +117,19 @@ async function startServer() {
             Identifier: `fees-${Date.now()}`
           }
         });
+      } else if (op === "createReport") {
+        url = `${BASE_URL_NA}/reports/2021-06-30/reports`;
+        method = "POST";
+        requestBody = JSON.stringify({
+          reportType: params?.reportType || "GET_MERCHANT_LISTINGS_ALL_DATA",
+          marketplaceIds: [marketplaceId]
+        });
+      } else if (op === "getReport") {
+        const encodedReportId = encodeURIComponent(params?.reportId || "");
+        url = `${BASE_URL_NA}/reports/2021-06-30/reports/${encodedReportId}`;
+      } else if (op === "getReportDocument") {
+        const encodedDocId = encodeURIComponent(params?.reportDocumentId || "");
+        url = `${BASE_URL_NA}/reports/2021-06-30/documents/${encodedDocId}`;
       } else {
         return res.status(400).json({ error: `Operation not supported: ${op}` });
       }
