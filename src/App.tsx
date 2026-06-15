@@ -188,6 +188,7 @@ export default function App() {
     setSelectedOrderForModal(null);
     setActiveTab("Listings / Itens");
     setLastSku(sku);
+    displayToast(`Carregando anúncio do SKU ${sku}…`);
     handleConsult(undefined, sku);
   };
 
@@ -1165,13 +1166,28 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {reportRows.slice(0, MAX_REPORT_PREVIEW).map((row, idx) => (
-                        <tr key={idx} className="hover:bg-surface-2 transition-colors">
-                          {reportDisplayCols.map(col => (
-                            <td key={col} className="p-3 max-w-[280px] truncate text-ink-2 font-mono" title={row[col]}>{row[col] || "-"}</td>
-                          ))}
-                        </tr>
-                      ))}
+                      {reportRows.slice(0, MAX_REPORT_PREVIEW).map((row, idx) => {
+                        const rowSku = row["seller-sku"];
+                        const canView = !!rowSku;
+                        return (
+                          <tr
+                            key={idx}
+                            onClick={canView ? () => handleViewItem(rowSku) : undefined}
+                            title={canView ? "Ver anúncio deste item" : undefined}
+                            className={`transition-colors ${canView ? "cursor-pointer hover:bg-accent/10" : "hover:bg-surface-2"}`}
+                          >
+                            {reportDisplayCols.map(col => (
+                              <td
+                                key={col}
+                                className={`p-3 max-w-[280px] truncate font-mono ${col === "seller-sku" && canView ? "text-accent font-bold" : "text-ink-2"}`}
+                                title={row[col]}
+                              >
+                                {row[col] || "-"}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
