@@ -7,6 +7,14 @@ interface ListingResultProps {
   onToast: (msg: string) => void;
 }
 
+// Posiciona o preço atual proporcionalmente dentro da faixa [mín, máx].
+// Retorna 0–100, com proteção contra divisão por zero (máx <= mín).
+function pricePosition(price: number, min: number, max: number): number {
+  if (max <= min) return 100;
+  const pct = ((price - min) / (max - min)) * 100;
+  return Math.max(0, Math.min(100, pct));
+}
+
 export function ListingResult({ data, onToast }: ListingResultProps) {
   const [descOpen, setDescOpen] = useState(false);
   
@@ -70,13 +78,22 @@ export function ListingResult({ data, onToast }: ListingResultProps) {
 
   const { intP: mainInt, decP: mainDec } = formatPriceParts(sellPrice || 0);
 
-  // Calcula a posição do slider min/max
-  let sliderPerc = 0;
-  if(minPrice && maxPrice && maxPrice > minPrice) {
-     const priceForCalc = sellPrice || minPrice;
-     sliderPerc = Math.max(0, Math.min(100, ((priceForCalc - minPrice) / (maxPrice - minPrice)) * 100));
-  } else if (!minPrice && !maxPrice) {
-    sliderPerc = 50;
+  // Calcula a posição do slider min/max.
+  // A API às vezes retorna os valores como string, então fazemos parse numérico
+  // explícito antes de normalizar (evita comparação/concatenação lexicográfica).
+  const toNum = (v: any): number | undefined => {
+    if (v === undefined || v === null || v === "") return undefined;
+    const n = parseFloat(v);
+    return isNaN(n) ? undefined : n;
+  };
+  const minNum = toNum(minPrice);
+  const maxNum = toNum(maxPrice);
+  const priceNum = toNum(sellPrice);
+
+  let sliderPerc = 50;
+  if (minNum !== undefined && maxNum !== undefined) {
+    // Sem preço atual, posiciona no mínimo da faixa.
+    sliderPerc = pricePosition(priceNum ?? minNum, minNum, maxNum);
   }
 
   const handleCopy = (text: string) => {
