@@ -98,9 +98,18 @@ export const exportAllListingsToExcel = (results: { sku: string; status: string;
 };
 
 // Exporta o relatório completo de anúncios (Reports API) preservando todas as colunas do TSV.
+// As colunas mais relevantes são movidas para o início; o restante mantém a ordem original.
 export const exportReportListingsToExcel = (rows: Record<string, string>[]) => {
   const wb = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(rows);
+
+  const LEAD_COLS = ["seller-sku", "listing-id", "price", "quantity"];
+  const allKeys = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const orderedHeader = [
+    ...LEAD_COLS.filter(c => allKeys.includes(c)),
+    ...allKeys.filter(c => !LEAD_COLS.includes(c)),
+  ];
+
+  const sheet = XLSX.utils.json_to_sheet(rows, { header: orderedHeader });
   XLSX.utils.book_append_sheet(wb, sheet, "Anúncios");
   XLSX.writeFile(wb, `Amazon_Todos_Anuncios_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
