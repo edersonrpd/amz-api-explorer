@@ -11,6 +11,7 @@ interface OrderDetailsModalProps {
   onLoadItems: (orderId: string) => void;
   onLoadFinances: (orderId: string) => void;
   onLoadFeesEstimates: (orderId: string, items: OrderItem[], isAmazonFulfilled: boolean) => void;
+  onViewItem: (sku: string) => void;
   onToast: (msg: string) => void;
 }
 
@@ -286,6 +287,7 @@ export function OrderDetailsModal({
   onLoadItems,
   onLoadFinances,
   onLoadFeesEstimates,
+  onViewItem,
   onToast
 }: OrderDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<"detail" | "json">("detail");
@@ -505,10 +507,26 @@ export function OrderDetailsModal({
                             const shipping = moneyOf(it.ShippingPrice);
                             const discounts = moneyOf(it.PromotionDiscount) + moneyOf(it.ShippingDiscount);
                             const taxes = moneyOf(it.ItemTax) + moneyOf(it.ShippingTax);
+                            const canView = !!sku && sku !== "—";
 
                             return (
-                              <tr key={idx}>
-                                <td className="mono">{sku}</td>
+                              <tr
+                                key={idx}
+                                className={canView ? "item-row clickable" : "item-row"}
+                                onClick={canView ? () => onViewItem(sku) : undefined}
+                                title={canView ? "Ver anúncio deste item" : undefined}
+                              >
+                                <td className="mono">
+                                  {canView ? (
+                                    <span className="item-link">
+                                      {sku}
+                                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M7 17 17 7" />
+                                        <path d="M7 7h10v10" />
+                                      </svg>
+                                    </span>
+                                  ) : sku}
+                                </td>
                                 <td className="mono">{asin}</td>
                                 <td>{title}</td>
                                 <td className="num">{qty}</td>
@@ -1311,6 +1329,28 @@ export function OrderDetailsModal({
           text-align: right;
           font-family: var(--font-mono);
           white-space: nowrap;
+        }
+        .items-tbl tr.clickable {
+          cursor: pointer;
+          transition: background 0.15s;
+        }
+        .items-tbl tr.clickable:hover {
+          background: var(--accent-soft, #eef4ff);
+        }
+        .item-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          color: var(--accent-strong, #1f6feb);
+          font-weight: 700;
+        }
+        .item-link svg {
+          width: 11px;
+          height: 11px;
+          opacity: 0.7;
+        }
+        .items-tbl tr.clickable:hover .item-link {
+          text-decoration: underline;
         }
         .tl {
           padding: 14px 16px 16px;

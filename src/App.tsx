@@ -71,9 +71,9 @@ export default function App() {
     return Array.from(new Set(rawArray.map(s => s.trim()).filter(s => s.length > 0)));
   };
 
-  const handleConsult = async (e?: FormEvent) => {
+  const handleConsult = async (e?: FormEvent, skuOverride?: string) => {
     if (e) e.preventDefault();
-    const targetSkus = parseSkus(lastSku);
+    const targetSkus = parseSkus(skuOverride ?? lastSku);
     if (targetSkus.length === 0) return;
 
     setIsLoading(true);
@@ -179,6 +179,16 @@ export default function App() {
   const displayToast = (msg: string) => {
     setToastMsg(msg);
     setShowToast(true);
+  };
+
+  // Ao clicar em um item dentro do modal de pedido, navega para a aba de
+  // Listings e carrega automaticamente o anúncio daquele SKU.
+  const handleViewItem = (sku: string) => {
+    if (!sku || sku === "—") return;
+    setSelectedOrderForModal(null);
+    setActiveTab("Listings / Itens");
+    setLastSku(sku);
+    handleConsult(undefined, sku);
   };
 
   const openJsonDrawer = (data: any, titleStr: string) => {
@@ -1226,6 +1236,7 @@ export default function App() {
           onLoadItems={handleLoadOrderItems}
           onLoadFinances={handleLoadOrderFinances}
           onLoadFeesEstimates={handleLoadOrderFeesEstimates}
+          onViewItem={handleViewItem}
           onToast={displayToast}
         />
       )}
