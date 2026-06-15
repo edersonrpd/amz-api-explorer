@@ -51,6 +51,8 @@ export default function App() {
   const [ordersFinancesCache, setOrdersFinancesCache] = useState<Record<string, { loading: boolean; finances?: OrderFinancesResponse; error?: string }>>({});
   const [ordersFeesEstimateCache, setOrdersFeesEstimateCache] = useState<Record<string, { loading: boolean; estimates?: OrderItemFeeEstimate[]; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
+  const [ordersSortKey, setOrdersSortKey] = useState<"date" | "id" | "total">("date");
+  const [ordersSortDir, setOrdersSortDir] = useState<"asc" | "desc">("desc");
 
   // Reports / Extração de todos os anúncios
   const [reportType, setReportType] = useState<string>("GET_MERCHANT_LISTINGS_ALL_DATA");
@@ -559,6 +561,32 @@ export default function App() {
   const reportDisplayCols = preferredReportCols.length > 0 ? preferredReportCols : reportHeaders.slice(0, 7);
   const MAX_REPORT_PREVIEW = 200;
 
+  // Clica em um cabeçalho: alterna a direção se for a mesma coluna, senão
+  // ativa a coluna com direção padrão (desc).
+  const handleSortOrders = (key: "date" | "id" | "total") => {
+    if (ordersSortKey === key) {
+      setOrdersSortDir(prev => (prev === "desc" ? "asc" : "desc"));
+    } else {
+      setOrdersSortKey(key);
+      setOrdersSortDir("desc");
+    }
+  };
+
+  const sortedOrders = [...orders].sort((a, b) => {
+    let cmp = 0;
+    if (ordersSortKey === "date") {
+      cmp = new Date(a.PurchaseDate).getTime() - new Date(b.PurchaseDate).getTime();
+    } else if (ordersSortKey === "total") {
+      cmp = parseFloat(a.OrderTotal?.Amount || "0") - parseFloat(b.OrderTotal?.Amount || "0");
+    } else {
+      cmp = a.AmazonOrderId.localeCompare(b.AmazonOrderId);
+    }
+    return ordersSortDir === "asc" ? cmp : -cmp;
+  });
+
+  const sortArrow = (key: "date" | "id" | "total") =>
+    ordersSortKey === key ? (ordersSortDir === "asc" ? " ↑" : " ↓") : "";
+
   return (
     <>
       {/* Top header */}
@@ -963,17 +991,35 @@ export default function App() {
                   <table className="orders">
                     <thead>
                       <tr>
-                        <th>ID do Pedido (Amazon)</th>
-                        <th>Data de Compra</th>
+                        <th
+                          onClick={() => handleSortOrders("id")}
+                          style={{ cursor: 'pointer', userSelect: 'none' }}
+                          title="Ordenar por ID do pedido"
+                        >
+                          ID do Pedido (Amazon){sortArrow("id")}
+                        </th>
+                        <th
+                          onClick={() => handleSortOrders("date")}
+                          style={{ cursor: 'pointer', userSelect: 'none' }}
+                          title="Ordenar por data de compra"
+                        >
+                          Data de Compra{sortArrow("date")}
+                        </th>
                         <th>Status</th>
                         <th>Canal</th>
                         <th>Itens</th>
-                        <th style={{ textAlign: 'right' }}>Total</th>
+                        <th
+                          onClick={() => handleSortOrders("total")}
+                          style={{ textAlign: 'right', cursor: 'pointer', userSelect: 'none' }}
+                          title="Ordenar por total"
+                        >
+                          Total{sortArrow("total")}
+                        </th>
                         <th></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {orders.map((ord) => {
+                      {sortedOrders.map((ord) => {
                         const statusLabelPT = STATUS_PT[ord.OrderStatus] || ord.OrderStatus;
                         
                         let badgeClass = "badge green";
