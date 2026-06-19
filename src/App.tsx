@@ -1,5 +1,6 @@
 import { useState, FormEvent, useEffect } from "react";
-import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances, getFeesEstimateForSku, createReport, getReport, getReportDocument, downloadReportDocument } from "./services/amazonService";
+import { getListingsItem, searchListingsItems, getOrders, getOrderItems, getOrderFinances, getFeesEstimateForSku, createReport, getReport, getReportDocument, downloadReportDocument, createRestrictedDataToken } from "./services/amazonService";
+import { renderLabel, LabelFormat } from "./lib/label";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { AmazonCredentials, AmazonListing, SkuResult, AmazonOrder, OrderItem, OrderFinancesResponse, OrderItemFeeEstimate } from "./types";
 import { MARKETPLACES } from "./constants";
@@ -50,6 +51,7 @@ export default function App() {
   const [ordersItemsCache, setOrdersItemsCache] = useState<Record<string, { loading: boolean; items?: OrderItem[]; error?: string }>>({});
   const [ordersFinancesCache, setOrdersFinancesCache] = useState<Record<string, { loading: boolean; finances?: OrderFinancesResponse; error?: string }>>({});
   const [ordersFeesEstimateCache, setOrdersFeesEstimateCache] = useState<Record<string, { loading: boolean; estimates?: OrderItemFeeEstimate[]; error?: string }>>({});
+  const [ordersLabelCache, setOrdersLabelCache] = useState<Record<string, { loading: boolean; progress?: string; error?: string }>>({});
   const [selectedOrderForModal, setSelectedOrderForModal] = useState<AmazonOrder | null>(null);
   const [ordersSortKey, setOrdersSortKey] = useState<"date" | "id" | "total">("date");
   const [ordersSortDir, setOrdersSortDir] = useState<"asc" | "desc">("desc");
@@ -386,6 +388,86 @@ export default function App() {
         ...prev,
         [orderId]: { loading: false, error: err.message || "Erro ao carregar dados financeiros." }
       }));
+    }
+  };
+
+  // Gera e imprime/baixa a etiqueta de envio de um pedido.
+  // Usa o relatório GET_EASYSHIP_DOCUMENTS (Easy Ship), baixando o documento
+  // com um Restricted Data Token (a etiqueta contém PII do comprador).
+  const handlePrintOrderLabel = async (orderId: string, format: LabelFormat) => {
+    if (ordersLabelCache[orderId]?.loading) return;
+    const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
+    const setProgress = (progress: string) =>
+      setOrdersLabelCache(prev => ({ ...prev, [orderId]: { loading: true, progress } }));
+
+    setProgress("Gerando etiqueta na Amazon...");
+
+    try {
+      // 1. RDT com escopo no download de documentos do relatório (PII).
+      const rdtRes = await createRestrictedDataToken(fixedCreds, {
+        restrictedResources: [
+          { method: "GET", path: "/reports/2021-06-30/documents/{reportDocumentId}" }
+        ]
+      });
+      const rdt = rdtRes.restrictedDataToken;
+      if (!rdt) throw new Error("A Amazon não retornou o Restricted Data Token (verifique o role de envio da aplicação).");
+
+      // 2. Solicita o relatório de documentos (etiqueta de envio) deste pedido.
+      const reportOptions: Record<string, string> = {
+        AmazonOrderId: orderId,
+        DocumentType: "ShippingLabel"
+      };
+      if (format === "ZPL") reportOptions.ShipmentFormat = "ZPL";
+      const created = await createReport(fixedCreds, {
+        reportType: "GET_EASYSHIP_DOCUMENTS",
+        reportOptions
+      });
+      const reportId = created.reportId;
+      if (!reportId) throw new Error("A Amazon não retornou um reportId para a etiqueta.");
+
+      // 3. Polling até o documento ficar pronto (geralmente poucos segundos).
+      let documentId: string | undefined;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        await new Promise(r => setTimeout(r, 3000));
+        setProgress(`Aguardando a Amazon gerar a etiqueta... (${attempt + 1})`);
+        const status = await getReport(fixedCreds, { reportId });
+        if (status.processingStatus === "DONE") {
+          documentId = status.reportDocumentId;
+          break;
+        }
+        if (status.processingStatus === "CANCELLED") {
+          throw new Error("A Amazon cancelou a geração. Confirme que o pedido é Easy Ship e já foi agendado/etiquetado.");
+        }
+        if (status.processingStatus === "FATAL") {
+          throw new Error("Erro fatal ao gerar a etiqueta. Confirme que a aplicação SP-API possui o role de envio (Easy Ship / Direct-to-Consumer Shipping).");
+        }
+      }
+      if (!documentId) throw new Error("Tempo limite excedido aguardando a etiqueta ficar pronta.");
+
+      // 4. URL pré-assinada do documento (chamada restrita → usa o RDT).
+      setProgress("Baixando a etiqueta...");
+      const doc = await getReportDocument(fixedCreds, { reportDocumentId: documentId, restrictedDataToken: rdt });
+
+      // 5. Download binário (PDF/ZPL) via proxy.
+      const downloaded = await downloadReportDocument(fixedCreds, {
+        url: doc.url,
+        compressionAlgorithm: doc.compressionAlgorithm,
+        binary: true
+      });
+      if (!downloaded.base64) throw new Error("A Amazon não retornou o conteúdo da etiqueta.");
+
+      // 6. Imprime (PDF) ou baixa (ZPL).
+      const action = renderLabel({
+        base64: downloaded.base64,
+        contentType: downloaded.contentType,
+        format,
+        fileBaseName: `etiqueta_${orderId}`
+      });
+      setOrdersLabelCache(prev => ({ ...prev, [orderId]: { loading: false } }));
+      displayToast(action === "printed" ? "Etiqueta aberta para impressão!" : "Etiqueta baixada!");
+    } catch (err: any) {
+      console.error(err);
+      setOrdersLabelCache(prev => ({ ...prev, [orderId]: { loading: false, error: err.message || "Erro ao gerar etiqueta." } }));
     }
   };
 
@@ -1295,9 +1377,11 @@ export default function App() {
           itemsCacheEntry={ordersItemsCache[selectedOrderForModal.AmazonOrderId]}
           financesCacheEntry={ordersFinancesCache[selectedOrderForModal.AmazonOrderId]}
           feesEstimateCacheEntry={ordersFeesEstimateCache[selectedOrderForModal.AmazonOrderId]}
+          labelCacheEntry={ordersLabelCache[selectedOrderForModal.AmazonOrderId]}
           onLoadItems={handleLoadOrderItems}
           onLoadFinances={handleLoadOrderFinances}
           onLoadFeesEstimates={handleLoadOrderFeesEstimates}
+          onPrintLabel={handlePrintOrderLabel}
           onViewItem={handleViewItem}
           onToast={displayToast}
         />

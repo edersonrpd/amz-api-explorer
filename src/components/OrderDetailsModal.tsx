@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { AmazonOrder, OrderItem, OrderFinancesResponse, ShipmentEvent, ServiceFeeEvent, OrderMoney, OrderItemFeeEstimate } from "../types";
+import { LabelFormat } from "../lib/label";
 
 interface OrderDetailsModalProps {
   isOpen: boolean;
@@ -8,9 +9,11 @@ interface OrderDetailsModalProps {
   itemsCacheEntry?: { loading: boolean; items?: OrderItem[]; error?: string };
   financesCacheEntry?: { loading: boolean; finances?: OrderFinancesResponse; error?: string };
   feesEstimateCacheEntry?: { loading: boolean; estimates?: OrderItemFeeEstimate[]; error?: string };
+  labelCacheEntry?: { loading: boolean; progress?: string; error?: string };
   onLoadItems: (orderId: string) => void;
   onLoadFinances: (orderId: string) => void;
   onLoadFeesEstimates: (orderId: string, items: OrderItem[], isAmazonFulfilled: boolean) => void;
+  onPrintLabel?: (orderId: string, format: LabelFormat) => void;
   onViewItem: (sku: string) => void;
   onToast: (msg: string) => void;
 }
@@ -284,17 +287,22 @@ export function OrderDetailsModal({
   itemsCacheEntry,
   financesCacheEntry,
   feesEstimateCacheEntry,
+  labelCacheEntry,
   onLoadItems,
   onLoadFinances,
   onLoadFeesEstimates,
+  onPrintLabel,
   onViewItem,
   onToast
 }: OrderDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<"detail" | "json">("detail");
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  const labelLoading = !!labelCacheEntry?.loading;
 
   useEffect(() => {
     if (isOpen) {
       setActiveTab("detail");
+      setLabelMenuOpen(false);
       // Load items immediately if not already in cache and not loading
       if (!itemsCacheEntry) {
         onLoadItems(order.AmazonOrderId);
@@ -405,13 +413,65 @@ export function OrderDetailsModal({
                   {badgesList}
                 </div>
               </div>
-              <button className="m-close" onClick={onClose} title="Fechar">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
+              <div className="m-head-actions">
+                {onPrintLabel && (
+                  <div className="label-print">
+                    <button
+                      type="button"
+                      className="m-print-btn"
+                      disabled={labelLoading}
+                      onClick={() => setLabelMenuOpen(o => !o)}
+                      title="Imprimir etiqueta de envio (Easy Ship) em PDF ou ZPL"
+                    >
+                      {labelLoading ? (
+                        <span className="m-print-spin" />
+                      ) : (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M6 9V2h12v7" />
+                          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                          <rect width="12" height="8" x="6" y="14" />
+                        </svg>
+                      )}
+                      <span className="m-print-label">
+                        {labelLoading ? (labelCacheEntry?.progress || "Gerando...") : "Imprimir etiqueta"}
+                      </span>
+                      {!labelLoading && (
+                        <svg className="m-print-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      )}
+                    </button>
+                    {labelMenuOpen && !labelLoading && (
+                      <div className="label-menu">
+                        <button
+                          type="button"
+                          onClick={() => { setLabelMenuOpen(false); onPrintLabel(order.AmazonOrderId, "PDF"); }}
+                        >
+                          PDF <span>imprimir</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setLabelMenuOpen(false); onPrintLabel(order.AmazonOrderId, "ZPL"); }}
+                        >
+                          ZPL <span>impressora Zebra</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button className="m-close" onClick={onClose} title="Fechar">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
+            {labelCacheEntry?.error && (
+              <div className="m-label-error">
+                <strong>Erro ao gerar etiqueta:</strong> {labelCacheEntry.error}
+              </div>
+            )}
             <div className="m-tabs">
               <button 
                 type="button"
@@ -1107,8 +1167,106 @@ export function OrderDetailsModal({
           margin-top: 11px;
           margin-bottom: 2px;
         }
-        .m-close {
+        .m-head-actions {
           margin-left: auto;
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          flex-shrink: 0;
+        }
+        .label-print {
+          position: relative;
+        }
+        .m-print-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          height: 34px;
+          padding: 0 12px;
+          border-radius: 9px;
+          border: 1px solid rgba(255,255,255,.18);
+          background: rgba(255,255,255,.08);
+          color: #eaf1fb;
+          font-size: 12.5px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: 0.15s;
+          white-space: nowrap;
+        }
+        .m-print-btn:hover:not(:disabled) {
+          background: rgba(255,255,255,.16);
+          border-color: rgba(255,255,255,.4);
+        }
+        .m-print-btn:disabled {
+          opacity: 0.85;
+          cursor: progress;
+        }
+        .m-print-btn svg {
+          width: 15px;
+          height: 15px;
+        }
+        .m-print-chev {
+          width: 13px !important;
+          height: 13px !important;
+          opacity: 0.75;
+        }
+        .m-print-spin {
+          width: 15px;
+          height: 15px;
+          border: 2px solid rgba(255,255,255,.4);
+          border-top-color: #fff;
+          border-radius: 50%;
+          animation: mPrintSpin 0.7s linear infinite;
+        }
+        @keyframes mPrintSpin {
+          to { transform: rotate(360deg); }
+        }
+        .label-menu {
+          position: absolute;
+          top: calc(100% + 6px);
+          right: 0;
+          min-width: 190px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          box-shadow: var(--shadow-lg);
+          padding: 5px;
+          z-index: 5;
+        }
+        .label-menu button {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          width: 100%;
+          text-align: left;
+          background: none;
+          border: none;
+          border-radius: 7px;
+          padding: 9px 11px;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--ink);
+          cursor: pointer;
+        }
+        .label-menu button:hover {
+          background: var(--accent-soft, #eef4ff);
+        }
+        .label-menu button span {
+          font-size: 11px;
+          font-weight: 500;
+          color: var(--muted);
+        }
+        .m-label-error {
+          margin-top: 12px;
+          padding: 9px 14px;
+          border-radius: 9px;
+          background: rgba(220, 38, 38, .14);
+          border: 1px solid rgba(248, 113, 113, .4);
+          color: #fecaca;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .m-close {
           width: 34px;
           height: 34px;
           border-radius: 9px;

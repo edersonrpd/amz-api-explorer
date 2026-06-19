@@ -49,6 +49,12 @@ async function startServer() {
         if (params?.compressionAlgorithm === "GZIP") {
           buffer = zlib.gunzipSync(buffer);
         }
+        // Documentos binários (ex: etiqueta de envio em PDF/ZPL/PNG) são devolvidos
+        // como Base64 + content-type, preservando os bytes originais.
+        if (params?.binary) {
+          const contentType = docResponse.headers.get("content-type") || "application/octet-stream";
+          return res.status(docResponse.status).json({ base64: buffer.toString("base64"), contentType });
+        }
         // Relatórios de listings podem vir em UTF-8 ou Latin-1 (Cp1252).
         // Decodifica como UTF-8 e, se houver caractere de substituição, refaz em latin1.
         let content = buffer.toString("utf-8");
@@ -120,10 +126,22 @@ async function startServer() {
       } else if (op === "createReport") {
         url = `${BASE_URL_NA}/reports/2021-06-30/reports`;
         method = "POST";
-        requestBody = JSON.stringify({
+        const reportBody: Record<string, any> = {
           reportType: params?.reportType || "GET_MERCHANT_LISTINGS_ALL_DATA",
           marketplaceIds: [marketplaceId]
-        });
+        };
+        // reportOptions é usado por relatórios parametrizados (ex: GET_EASYSHIP_DOCUMENTS
+        // exige AmazonOrderId + DocumentType para gerar a etiqueta de um pedido).
+        if (params?.reportOptions) {
+          reportBody.reportOptions = params.reportOptions;
+        }
+        requestBody = JSON.stringify(reportBody);
+      } else if (op === "createRestrictedDataToken") {
+        // Tokens API: gera um RDT com escopo nas operações que retornam PII
+        // (nome/endereço do comprador), necessário para baixar etiquetas de envio.
+        url = `${BASE_URL_NA}/tokens/2021-03-01/restrictedDataToken`;
+        method = "POST";
+        requestBody = JSON.stringify({ restrictedResources: params?.restrictedResources || [] });
       } else if (op === "getReport") {
         const encodedReportId = encodeURIComponent(params?.reportId || "");
         url = `${BASE_URL_NA}/reports/2021-06-30/reports/${encodedReportId}`;
@@ -135,7 +153,9 @@ async function startServer() {
       }
 
       const fetchHeaders = new Headers();
-      fetchHeaders.set("x-amz-access-token", accessToken);
+      // Operações que retornam PII (ex: etiqueta de envio) usam um Restricted Data
+      // Token (RDT) no lugar do access token comum.
+      fetchHeaders.set("x-amz-access-token", params?.restrictedDataToken || accessToken);
       fetchHeaders.set("accept", "application/json");
       fetchHeaders.set("user-agent", "Amazon-Listings-Explorer/1.0 (Language=Node.js)");
       if (requestBody) {

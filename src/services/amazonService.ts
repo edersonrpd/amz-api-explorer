@@ -420,10 +420,30 @@ export interface GetReportDocumentResponse {
   compressionAlgorithm?: "GZIP";
 }
 
-// 1. Solicita a geração do relatório.
+export interface RestrictedResource {
+  method: "GET" | "PUT" | "POST" | "DELETE";
+  path: string;
+  dataElements?: string[];
+}
+
+export interface RestrictedDataTokenResponse {
+  restrictedDataToken: string;
+  expiresIn?: number;
+}
+
+// 0. Gera um Restricted Data Token (RDT) para operações que retornam PII
+// (ex: download de etiqueta de envio, que contém nome/endereço do comprador).
+export const createRestrictedDataToken = (
+  credentials: AmazonCredentials,
+  params: { restrictedResources: RestrictedResource[] }
+): Promise<RestrictedDataTokenResponse> =>
+  callProxy({ credentials, params, operation: "createRestrictedDataToken" });
+
+// 1. Solicita a geração do relatório. reportOptions é usado por relatórios
+// parametrizados (ex: GET_EASYSHIP_DOCUMENTS exige AmazonOrderId + DocumentType).
 export const createReport = (
   credentials: AmazonCredentials,
-  params: { reportType: string }
+  params: { reportType: string; reportOptions?: Record<string, string> }
 ): Promise<CreateReportResponse> =>
   callProxy({ credentials, params, operation: "createReport" });
 
@@ -434,16 +454,18 @@ export const getReport = (
 ): Promise<GetReportResponse> =>
   callProxy({ credentials, params, operation: "getReport" });
 
-// 3. Obtém a URL pré-assinada para download do documento gerado.
+// 3. Obtém a URL pré-assinada para download do documento gerado. Relatórios
+// restritos (ex: documentos de Easy Ship) exigem um RDT em restrictedDataToken.
 export const getReportDocument = (
   credentials: AmazonCredentials,
-  params: { reportDocumentId: string }
+  params: { reportDocumentId: string; restrictedDataToken?: string }
 ): Promise<GetReportDocumentResponse> =>
   callProxy({ credentials, params, operation: "getReportDocument" });
 
 // 4. Faz o download (e descompressão) do conteúdo do relatório via proxy.
+// Com binary=true, devolve o documento como Base64 (ex: etiqueta em PDF/ZPL).
 export const downloadReportDocument = (
   credentials: AmazonCredentials,
-  params: { url: string; compressionAlgorithm?: string }
-): Promise<{ content: string }> =>
+  params: { url: string; compressionAlgorithm?: string; binary?: boolean }
+): Promise<{ content?: string; base64?: string; contentType?: string }> =>
   callProxy({ credentials, params, operation: "downloadReportDocument" });
