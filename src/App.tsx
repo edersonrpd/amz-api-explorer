@@ -392,8 +392,9 @@ export default function App() {
   };
 
   // Gera e imprime/baixa a etiqueta de envio de um pedido.
-  // Usa o relatório GET_EASYSHIP_DOCUMENTS (Easy Ship), baixando o documento
-  // com um Restricted Data Token (a etiqueta contém PII do comprador).
+  // Usa o relatório GET_EASYSHIP_DOCUMENTS (Easy Ship). O documento contém PII
+  // do comprador, então é baixado com um Restricted Data Token gerado com o ID
+  // real do documento (a Tokens API rejeita o template "{reportDocumentId}").
   const handlePrintOrderLabel = async (orderId: string, format: LabelFormat) => {
     if (ordersLabelCache[orderId]?.loading) return;
     const fixedCreds = { ...credentials, marketplaceId: "A2Q3Y263D00KWC" };
@@ -403,16 +404,7 @@ export default function App() {
     setProgress("Gerando etiqueta na Amazon...");
 
     try {
-      // 1. RDT com escopo no download de documentos do relatório (PII).
-      const rdtRes = await createRestrictedDataToken(fixedCreds, {
-        restrictedResources: [
-          { method: "GET", path: "/reports/2021-06-30/documents/{reportDocumentId}" }
-        ]
-      });
-      const rdt = rdtRes.restrictedDataToken;
-      if (!rdt) throw new Error("A Amazon não retornou o Restricted Data Token (verifique o role de envio da aplicação).");
-
-      // 2. Solicita o relatório de documentos (etiqueta de envio) deste pedido.
+      // 1. Solicita o relatório de documentos (etiqueta de envio) deste pedido.
       const reportOptions: Record<string, string> = {
         AmazonOrderId: orderId,
         DocumentType: "ShippingLabel"
@@ -425,7 +417,7 @@ export default function App() {
       const reportId = created.reportId;
       if (!reportId) throw new Error("A Amazon não retornou um reportId para a etiqueta.");
 
-      // 3. Polling até o documento ficar pronto (geralmente poucos segundos).
+      // 2. Polling até o documento ficar pronto (geralmente poucos segundos).
       let documentId: string | undefined;
       for (let attempt = 0; attempt < 40; attempt++) {
         await new Promise(r => setTimeout(r, 3000));
@@ -444,8 +436,22 @@ export default function App() {
       }
       if (!documentId) throw new Error("Tempo limite excedido aguardando a etiqueta ficar pronta.");
 
-      // 4. URL pré-assinada do documento (chamada restrita → usa o RDT).
+      // 3. RDT com o ID REAL do documento (relatório restrito por conter PII).
+      // Se a geração falhar, segue com o access token comum.
       setProgress("Baixando a etiqueta...");
+      let rdt: string | undefined;
+      try {
+        const rdtRes = await createRestrictedDataToken(fixedCreds, {
+          restrictedResources: [
+            { method: "GET", path: `/reports/2021-06-30/documents/${documentId}` }
+          ]
+        });
+        rdt = rdtRes.restrictedDataToken;
+      } catch (rdtErr) {
+        console.warn("RDT indisponível, tentando com o access token comum:", rdtErr);
+      }
+
+      // 4. URL pré-assinada do documento (usa o RDT quando disponível).
       const doc = await getReportDocument(fixedCreds, { reportDocumentId: documentId, restrictedDataToken: rdt });
 
       // 5. Download binário (PDF/ZPL) via proxy.
