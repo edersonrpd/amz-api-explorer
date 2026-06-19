@@ -1383,11 +1383,9 @@ export default function App() {
           itemsCacheEntry={ordersItemsCache[selectedOrderForModal.AmazonOrderId]}
           financesCacheEntry={ordersFinancesCache[selectedOrderForModal.AmazonOrderId]}
           feesEstimateCacheEntry={ordersFeesEstimateCache[selectedOrderForModal.AmazonOrderId]}
-          labelCacheEntry={ordersLabelCache[selectedOrderForModal.AmazonOrderId]}
           onLoadItems={handleLoadOrderItems}
           onLoadFinances={handleLoadOrderFinances}
           onLoadFeesEstimates={handleLoadOrderFeesEstimates}
-          onPrintLabel={handlePrintOrderLabel}
           onViewItem={handleViewItem}
           onToast={displayToast}
         />
