@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { AmazonListing } from "../types";
 import { exportListingToExcel } from "../lib/export";
+import { getListingVariations, parentageLabel } from "../lib/variations";
 
 interface ListingResultProps {
   data: AmazonListing;
   onToast: (msg: string) => void;
+  // Consulta um ou mais SKUs (usado para navegar entre pai e variações).
+  onConsultSkus?: (skus: string[]) => void;
 }
 
 // Posiciona o preço atual proporcionalmente dentro da faixa [mín, máx].
@@ -15,8 +18,9 @@ function pricePosition(price: number, min: number, max: number): number {
   return Math.max(0, Math.min(100, pct));
 }
 
-export function ListingResult({ data, onToast }: ListingResultProps) {
+export function ListingResult({ data, onToast, onConsultSkus }: ListingResultProps) {
   const [descOpen, setDescOpen] = useState(false);
+  const variations = getListingVariations(data);
   
   const summary = data.summaries?.[0] || {} as any;
   const attributes = data.attributes || {};
@@ -139,6 +143,11 @@ export function ListingResult({ data, onToast }: ListingResultProps) {
                   <span key={st} className={`badge ${st === 'BUYABLE' || st === 'DISCOVERABLE' ? 'green' : 'blue'}`}>{st}</span>
                 ))}
                 {ean && <span className="badge blue">EAN {ean}</span>}
+                {variations.level !== "standalone" && (
+                  <span className="badge purple" title={variations.theme ? `Tema de variação: ${variations.theme}` : undefined}>
+                    {parentageLabel(variations.level)}
+                  </span>
+                )}
               </div>
               <div className="meta-grid">
                 <div className="meta"><div className="mk">Condição</div><div className="mv cond">{condition}</div></div>
@@ -324,12 +333,97 @@ export function ListingResult({ data, onToast }: ListingResultProps) {
             <h2>Relacionamentos</h2>
           </div>
           <div className="side-block">
-             {data.relationships && data.relationships.length > 0 ? (
-               <p className="text-[13px] font-medium">{data.relationships.length} relacionamentos.</p>
-             ) : (
-               <p className="empty-note">Sem relacionamentos (parent/child).</p>
-             )}
+            <div className="side-label">Tipo</div>
+            <div className="line">
+              <div className="ln-l">
+                <span className="ln-k">{parentageLabel(variations.level)}</span>
+                {variations.theme && <span className="ln-s">Tema: {variations.theme}</span>}
+              </div>
+              {variations.level === "parent" && (
+                <span className="ln-v">{variations.childSkus.length} <span style={{color:'var(--muted)',fontWeight:600,fontSize:'11px'}}>variações</span></span>
+              )}
+            </div>
+            {variations.ownValues.length > 0 && (
+              <div className="var-values">
+                {variations.ownValues.map(v => (
+                  <span key={v.name} className="pill neutral" title={v.name}>{v.name.replace(/_name$/, '')}: {v.value}</span>
+                ))}
+              </div>
+            )}
           </div>
+
+          {variations.level === "child" && variations.parentSkus.length > 0 && (
+            <div className="side-block">
+              <div className="side-label">SKU pai</div>
+              {variations.parentSkus.map(sku => (
+                <div className="line" key={sku}>
+                  <div className="ln-l">
+                    <span className="ln-k">{sku}</span>
+                    <span className="ln-s">Anúncio pai desta variação</span>
+                  </div>
+                  {onConsultSkus && (
+                    <button className="btn btn-ghost btn-xs" onClick={() => onConsultSkus([sku])} title="Consultar o SKU pai">
+                      Abrir
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {variations.level === "parent" && (
+            <div className="side-block">
+              <div className="side-label">Variações (SKUs filhos)</div>
+              {variations.childSkus.length === 0 ? (
+                <p className="empty-note">
+                  A Amazon marcou este SKU como pai, mas não devolveu a lista de filhos em <code>relationships</code>.
+                  Consulte os SKUs filhos diretamente: cada um traz o pai em <code>child_parent_sku_relationship</code>.
+                </p>
+              ) : (
+                <>
+                  <div className="sku-list">
+                    {variations.childSkus.map(sku => (
+                      <div className="line" key={sku}>
+                        <div className="ln-l"><span className="ln-k">{sku}</span></div>
+                        {onConsultSkus && (
+                          <button className="btn btn-ghost btn-xs" onClick={() => onConsultSkus([sku])} title="Consultar esta variação">
+                            Abrir
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {onConsultSkus && (
+                    <button
+                      className="btn btn-dark"
+                      style={{marginTop: '12px', width: '100%', justifyContent: 'center'}}
+                      onClick={() => onConsultSkus(variations.childSkus)}
+                    >
+                      Consultar todas as variações ({variations.childSkus.length})
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-ghost"
+                    style={{marginTop: '8px', width: '100%', justifyContent: 'center'}}
+                    onClick={() => {
+                      if (navigator.clipboard) {
+                        navigator.clipboard.writeText(variations.childSkus.join("\n"));
+                        onToast('SKUs filhos copiados!');
+                      }
+                    }}
+                  >
+                    Copiar lista de SKUs
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {variations.level === "standalone" && (
+            <div className="side-block">
+              <p className="empty-note">Sem relacionamentos (parent/child).</p>
+            </div>
+          )}
         </section>
       </div>
     </div>

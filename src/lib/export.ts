@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { AmazonListing } from "../types";
+import { getListingVariations, parentageLabel } from "./variations";
 
 const flattenAttributes = (attributes: Record<string, any>) => {
   const flat: Record<string, string> = {};
@@ -54,6 +55,20 @@ export const exportListingToExcel = (data: AmazonListing) => {
     XLSX.utils.book_append_sheet(wb, issuesSheet, "Issues");
   }
 
+  // 5. Relationships Sheet (parent/child): uma linha por SKU relacionado
+  const variations = getListingVariations(data);
+  if (variations.level !== "standalone") {
+    const relRows = [
+      ...variations.parentSkus.map(sku => ({ Relacao: "Pai (parent)", SKU: sku, Tema: variations.theme || "" })),
+      ...variations.childSkus.map(sku => ({ Relacao: "Variação (child)", SKU: sku, Tema: variations.theme || "" })),
+    ];
+    if (relRows.length === 0) {
+      relRows.push({ Relacao: parentageLabel(variations.level), SKU: data.sku, Tema: variations.theme || "" });
+    }
+    const relSheet = XLSX.utils.json_to_sheet(relRows);
+    XLSX.utils.book_append_sheet(wb, relSheet, "Relationships");
+  }
+
   XLSX.writeFile(wb, `${data.sku}_listing.xlsx`);
 };
 
@@ -73,6 +88,9 @@ export const exportAllListingsToExcel = (results: { sku: string; status: string;
     const sellPrice = priceAttr?.our_price?.[0]?.schedule?.[0]?.value_with_tax || data.offers?.[0]?.price?.amount;
     const priceFormatted = sellPrice !== undefined && sellPrice !== null ? `R$ ${sellPrice.toFixed(2).replace('.', ',')}` : "-";
 
+    const variations = getListingVariations(r.data);
+    const variationValues = variations.ownValues.map(v => `${v.name}=${v.value}`).join("; ");
+
     let displayStatus = "Pendente";
     if (r.status === "searching") displayStatus = "Buscando";
     if (r.status === "success") displayStatus = "Sucesso";
@@ -86,6 +104,11 @@ export const exportAllListingsToExcel = (results: { sku: string; status: string;
       "Preço": priceFormatted,
       "Estoque": qty,
       "Status do Anúncio": statuses,
+      "Tipo": r.data ? parentageLabel(variations.level) : "-",
+      "SKU Pai": variations.parentSkus.join(", ") || "-",
+      "SKUs Filhos": variations.childSkus.join(", ") || "-",
+      "Tema Variação": variations.theme || "-",
+      "Valores Variação": variationValues || "-",
       "Status da Consulta": displayStatus,
       "Detalhes do Erro": r.status === "error" || r.status === "not_found" ? r.errorMsg || r.status : ""
     };

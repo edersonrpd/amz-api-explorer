@@ -65,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const encodedSku = encodeURIComponent(params?.sku || "");
       const queryParams = new URLSearchParams({
         marketplaceIds: marketplaceId,
-        includedData: "summaries,attributes,issues,offers,fulfillmentAvailability",
+        includedData: "summaries,attributes,issues,offers,fulfillmentAvailability,relationships",
         issueLocale: "en_US"
       });
       url = `${BASE_URL_NA}/listings/2021-08-01/items/${encodedSellerId}/${encodedSku}?${queryParams.toString()}`;
@@ -74,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         marketplaceIds: marketplaceId,
         identifiers: (params?.skus || []).join(","),
         identifiersType: "SKU",
-        includedData: "summaries,attributes,issues,offers,fulfillmentAvailability",
+        includedData: "summaries,attributes,issues,offers,fulfillmentAvailability,relationships",
         pageSize: "20"
       });
       url = `${BASE_URL_NA}/listings/2021-08-01/items/${encodedSellerId}?${queryParams.toString()}`;

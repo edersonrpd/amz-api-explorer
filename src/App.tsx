@@ -196,6 +196,17 @@ export default function App() {
     handleConsult(undefined, sku);
   };
 
+  // Consulta um conjunto de SKUs vindo do card de Relacionamentos (SKU pai ou
+  // lista de variações), preenchendo o campo de busca para ficar reproduzível.
+  const handleConsultSkus = (skus: string[]) => {
+    const clean = skus.map(s => s.trim()).filter(Boolean);
+    if (clean.length === 0) return;
+    const joined = clean.join("\n");
+    setLastSku(joined);
+    displayToast(clean.length === 1 ? `Carregando SKU ${clean[0]}…` : `Carregando ${clean.length} variações…`);
+    handleConsult(undefined, joined);
+  };
+
   const openJsonDrawer = (data: any, titleStr: string) => {
     setDrawerData(data);
     setDrawerTitle(titleStr);
@@ -892,7 +903,7 @@ export default function App() {
                 </div>
 
                 {/* Main grid */}
-                <ListingResult data={selectedResult} onToast={displayToast} />
+                <ListingResult data={selectedResult} onToast={displayToast} onConsultSkus={handleConsultSkus} />
               </>
             )}
           </>

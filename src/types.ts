@@ -56,6 +56,27 @@ export interface ItemSummary {
   };
 }
 
+// Relacionamentos parent/child (variações) retornados pela Listings Items API
+// quando includedData contém "relationships".
+//   - No SKU pai: childSkus lista as variações.
+//   - No SKU filho: parentSkus aponta para o pai.
+export interface ItemVariationTheme {
+  attributes?: string[];
+  theme?: string;
+}
+
+export interface ItemRelationship {
+  childSkus?: string[];
+  parentSkus?: string[];
+  variationTheme?: ItemVariationTheme;
+  type: "VARIATION" | "PACKAGE_HIERARCHY" | string;
+}
+
+export interface ItemRelationshipsByMarketplace {
+  marketplaceId: string;
+  relationships: ItemRelationship[];
+}
+
 export interface AmazonListing {
   sku: string;
   summaries: ItemSummary[];
@@ -64,8 +85,27 @@ export interface AmazonListing {
   offers: any[];
   fulfillmentAvailability: any[];
   procurementType: any;
-  relationships: any[];
+  relationships: ItemRelationshipsByMarketplace[];
   productTypes: any[];
+}
+
+// Visão consolidada das variações de um anúncio (parent/child), combinando
+// o bloco "relationships" com os atributos parentage_level,
+// child_parent_sku_relationship e variation_theme.
+export type ParentageLevel = "parent" | "child" | "standalone";
+
+export interface VariationAttribute {
+  name: string;   // ex: color_name
+  value: string;  // ex: Azul
+}
+
+export interface ListingVariations {
+  level: ParentageLevel;
+  parentSkus: string[];
+  childSkus: string[];
+  theme?: string;
+  themeAttributes: string[];
+  ownValues: VariationAttribute[];
 }
 
 export interface SkuResult {
