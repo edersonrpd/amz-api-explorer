@@ -1034,6 +1034,34 @@ export function OrderDetailsModal({
                   <pre id="mJson" dangerouslySetInnerHTML={{ __html: highlight(order) }} />
                 </div>
               </div>
+              {itemsCacheEntry?.items && (
+                <div className="json-pane" style={{ marginTop: '14px' }}>
+                  <div className="json-bar">
+                    <span className="t">getOrderItems · {order.AmazonOrderId}</span>
+                    <div className="right">
+                      <button
+                        className="m-copy-btn"
+                        onClick={() => {
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(JSON.stringify(itemsCacheEntry.items, null, 2));
+                            onToast("JSON dos itens copiado!");
+                          }
+                        }}
+                        title="Copiar JSON dos itens"
+                        style={{ borderColor: 'rgba(255,255,255,.16)' }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect width="13" height="13" x="9" y="9" rx="2" />
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="json-scroll">
+                    <pre dangerouslySetInnerHTML={{ __html: highlight(itemsCacheEntry.items) }} />
+                  </div>
+                </div>
+              )}
               {financesCacheEntry?.finances && (
                 <div className="json-pane" style={{ marginTop: '14px' }}>
                   <div className="json-bar">
